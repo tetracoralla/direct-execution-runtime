@@ -6,6 +6,10 @@ It validates those calls, keeps eligible provider processes and MCP sessions
 warm, applies host limits, and returns ordered correlated results without
 asking a model to reinterpret each step.
 
+It is the bounded host-execution component of the
+[Agent-Host Execution Architecture](https://github.com/tetracoralla/agent-host-execution-architecture),
+whose other layers remain independently adoptable repositories.
+
 The runtime does not replace or patch an Agent shell. The layers stay separate:
 
 ```text
