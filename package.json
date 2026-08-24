@@ -1,0 +1,61 @@
+{
+  "name": "@openadam/direct-execution-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "author": "openAdam",
+  "description": "Host-owned direct execution for closed structured provider calls.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tetracoralla/direct-execution-runtime.git"
+  },
+  "homepage": "https://github.com/tetracoralla/direct-execution-runtime#readme",
+  "bugs": {
+    "url": "https://github.com/tetracoralla/direct-execution-runtime/issues"
+  },
+  "keywords": [
+    "agent",
+    "capability",
+    "direct-execution",
+    "mcp",
+    "procedure",
+    "runtime"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "bin": {
+    "openadam-direct-exec": "src/cli.mjs",
+    "openadam-direct-evals-driver": "src/evals-driver.mjs"
+  },
+  "files": [
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md",
+    "SECURITY.md",
+    "src/",
+    "schemas/",
+    "docs/",
+    "examples/"
+  ],
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "generate:third-party-notices": "node scripts/generate-third-party-notices.mjs",
+    "check:legal": "node scripts/generate-third-party-notices.mjs --check",
+    "check:syntax": "node scripts/check-syntax.mjs",
+    "check:repository": "node scripts/check-repository.mjs",
+    "check": "npm run check:syntax && npm test && npm run check:legal && npm run check:repository && npm run check:package",
+    "check:package": "node scripts/check-package.mjs",
+    "check:local-pilots": "node scripts/check-local-pilots.mjs",
+    "audit:production": "npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "3.0.1"
+  }
+}

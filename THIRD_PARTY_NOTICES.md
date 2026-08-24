@@ -1,0 +1,102 @@
+# Third-Party Notices
+
+Direct Execution Runtime uses the production dependency packages listed below.
+They are resolved by npm and are not copied into this source repository. Each
+installed package carries its own license text and remains governed by that
+license. This inventory is generated from the committed package lock; run
+`npm run generate:third-party-notices` after dependency changes.
+
+| Package | Version | Declared license |
+| --- | ---: | --- |
+| [@hono/node-server](https://www.npmjs.com/package/%40hono%2Fnode-server/v/2.1.1) | 2.1.1 | MIT |
+| [@modelcontextprotocol/sdk](https://www.npmjs.com/package/%40modelcontextprotocol%2Fsdk/v/1.30.0) | 1.30.0 | MIT |
+| [accepts](https://www.npmjs.com/package/accepts/v/2.0.0) | 2.0.0 | MIT |
+| [ajv](https://www.npmjs.com/package/ajv/v/8.20.0) | 8.20.0 | MIT |
+| [ajv-formats](https://www.npmjs.com/package/ajv-formats/v/3.0.1) | 3.0.1 | MIT |
+| [body-parser](https://www.npmjs.com/package/body-parser/v/2.3.0) | 2.3.0 | MIT |
+| [bytes](https://www.npmjs.com/package/bytes/v/3.1.2) | 3.1.2 | MIT |
+| [call-bind-apply-helpers](https://www.npmjs.com/package/call-bind-apply-helpers/v/1.0.2) | 1.0.2 | MIT |
+| [call-bound](https://www.npmjs.com/package/call-bound/v/1.0.4) | 1.0.4 | MIT |
+| [content-disposition](https://www.npmjs.com/package/content-disposition/v/1.1.0) | 1.1.0 | MIT |
+| [content-type](https://www.npmjs.com/package/content-type/v/1.0.5) | 1.0.5 | MIT |
+| [content-type](https://www.npmjs.com/package/content-type/v/2.1.0) | 2.1.0 | MIT |
+| [cookie](https://www.npmjs.com/package/cookie/v/0.7.2) | 0.7.2 | MIT |
+| [cookie-signature](https://www.npmjs.com/package/cookie-signature/v/1.2.2) | 1.2.2 | MIT |
+| [cors](https://www.npmjs.com/package/cors/v/2.8.6) | 2.8.6 | MIT |
+| [cross-spawn](https://www.npmjs.com/package/cross-spawn/v/7.0.6) | 7.0.6 | MIT |
+| [debug](https://www.npmjs.com/package/debug/v/4.4.3) | 4.4.3 | MIT |
+| [depd](https://www.npmjs.com/package/depd/v/2.0.0) | 2.0.0 | MIT |
+| [dunder-proto](https://www.npmjs.com/package/dunder-proto/v/1.0.1) | 1.0.1 | MIT |
+| [ee-first](https://www.npmjs.com/package/ee-first/v/1.1.1) | 1.1.1 | MIT |
+| [encodeurl](https://www.npmjs.com/package/encodeurl/v/2.0.0) | 2.0.0 | MIT |
+| [es-define-property](https://www.npmjs.com/package/es-define-property/v/1.0.1) | 1.0.1 | MIT |
+| [es-errors](https://www.npmjs.com/package/es-errors/v/1.3.0) | 1.3.0 | MIT |
+| [es-object-atoms](https://www.npmjs.com/package/es-object-atoms/v/1.1.2) | 1.1.2 | MIT |
+| [escape-html](https://www.npmjs.com/package/escape-html/v/1.0.3) | 1.0.3 | MIT |
+| [etag](https://www.npmjs.com/package/etag/v/1.8.1) | 1.8.1 | MIT |
+| [eventsource](https://www.npmjs.com/package/eventsource/v/3.0.7) | 3.0.7 | MIT |
+| [eventsource-parser](https://www.npmjs.com/package/eventsource-parser/v/3.1.1) | 3.1.1 | MIT |
+| [express](https://www.npmjs.com/package/express/v/5.2.1) | 5.2.1 | MIT |
+| [express-rate-limit](https://www.npmjs.com/package/express-rate-limit/v/8.6.2) | 8.6.2 | MIT |
+| [fast-deep-equal](https://www.npmjs.com/package/fast-deep-equal/v/3.1.3) | 3.1.3 | MIT |
+| [fast-uri](https://www.npmjs.com/package/fast-uri/v/3.1.6) | 3.1.6 | BSD-3-Clause |
+| [finalhandler](https://www.npmjs.com/package/finalhandler/v/2.1.1) | 2.1.1 | MIT |
+| [forwarded](https://www.npmjs.com/package/forwarded/v/0.2.0) | 0.2.0 | MIT |
+| [fresh](https://www.npmjs.com/package/fresh/v/2.0.0) | 2.0.0 | MIT |
+| [function-bind](https://www.npmjs.com/package/function-bind/v/1.1.2) | 1.1.2 | MIT |
+| [get-intrinsic](https://www.npmjs.com/package/get-intrinsic/v/1.3.0) | 1.3.0 | MIT |
+| [get-proto](https://www.npmjs.com/package/get-proto/v/1.0.1) | 1.0.1 | MIT |
+| [gopd](https://www.npmjs.com/package/gopd/v/1.2.0) | 1.2.0 | MIT |
+| [has-symbols](https://www.npmjs.com/package/has-symbols/v/1.1.0) | 1.1.0 | MIT |
+| [hasown](https://www.npmjs.com/package/hasown/v/2.0.4) | 2.0.4 | MIT |
+| [hono](https://www.npmjs.com/package/hono/v/4.13.3) | 4.13.3 | MIT |
+| [http-errors](https://www.npmjs.com/package/http-errors/v/2.0.1) | 2.0.1 | MIT |
+| [iconv-lite](https://www.npmjs.com/package/iconv-lite/v/0.7.3) | 0.7.3 | MIT |
+| [inherits](https://www.npmjs.com/package/inherits/v/2.0.4) | 2.0.4 | ISC |
+| [ip-address](https://www.npmjs.com/package/ip-address/v/10.5.0) | 10.5.0 | MIT |
+| [ipaddr.js](https://www.npmjs.com/package/ipaddr.js/v/1.9.1) | 1.9.1 | MIT |
+| [is-promise](https://www.npmjs.com/package/is-promise/v/4.0.0) | 4.0.0 | MIT |
+| [isexe](https://www.npmjs.com/package/isexe/v/2.0.0) | 2.0.0 | ISC |
+| [jose](https://www.npmjs.com/package/jose/v/6.2.10) | 6.2.10 | MIT |
+| [json-schema-traverse](https://www.npmjs.com/package/json-schema-traverse/v/1.0.0) | 1.0.0 | MIT |
+| [json-schema-typed](https://www.npmjs.com/package/json-schema-typed/v/8.0.2) | 8.0.2 | BSD-2-Clause |
+| [math-intrinsics](https://www.npmjs.com/package/math-intrinsics/v/1.1.0) | 1.1.0 | MIT |
+| [media-typer](https://www.npmjs.com/package/media-typer/v/1.1.1) | 1.1.1 | MIT |
+| [merge-descriptors](https://www.npmjs.com/package/merge-descriptors/v/2.0.0) | 2.0.0 | MIT |
+| [mime-db](https://www.npmjs.com/package/mime-db/v/1.54.0) | 1.54.0 | MIT |
+| [mime-types](https://www.npmjs.com/package/mime-types/v/3.0.2) | 3.0.2 | MIT |
+| [ms](https://www.npmjs.com/package/ms/v/2.1.3) | 2.1.3 | MIT |
+| [negotiator](https://www.npmjs.com/package/negotiator/v/1.1.0) | 1.1.0 | MIT |
+| [object-assign](https://www.npmjs.com/package/object-assign/v/4.1.1) | 4.1.1 | MIT |
+| [object-inspect](https://www.npmjs.com/package/object-inspect/v/1.13.4) | 1.13.4 | MIT |
+| [on-finished](https://www.npmjs.com/package/on-finished/v/2.4.1) | 2.4.1 | MIT |
+| [once](https://www.npmjs.com/package/once/v/1.4.0) | 1.4.0 | ISC |
+| [parseurl](https://www.npmjs.com/package/parseurl/v/1.3.3) | 1.3.3 | MIT |
+| [path-key](https://www.npmjs.com/package/path-key/v/3.1.1) | 3.1.1 | MIT |
+| [path-to-regexp](https://www.npmjs.com/package/path-to-regexp/v/8.4.2) | 8.4.2 | MIT |
+| [pkce-challenge](https://www.npmjs.com/package/pkce-challenge/v/5.0.1) | 5.0.1 | MIT |
+| [proxy-addr](https://www.npmjs.com/package/proxy-addr/v/2.0.7) | 2.0.7 | MIT |
+| [qs](https://www.npmjs.com/package/qs/v/6.15.3) | 6.15.3 | BSD-3-Clause |
+| [range-parser](https://www.npmjs.com/package/range-parser/v/1.3.0) | 1.3.0 | MIT |
+| [raw-body](https://www.npmjs.com/package/raw-body/v/3.0.2) | 3.0.2 | MIT |
+| [require-from-string](https://www.npmjs.com/package/require-from-string/v/2.0.2) | 2.0.2 | MIT |
+| [router](https://www.npmjs.com/package/router/v/2.2.0) | 2.2.0 | MIT |
+| [safer-buffer](https://www.npmjs.com/package/safer-buffer/v/2.1.2) | 2.1.2 | MIT |
+| [send](https://www.npmjs.com/package/send/v/1.2.1) | 1.2.1 | MIT |
+| [serve-static](https://www.npmjs.com/package/serve-static/v/2.2.1) | 2.2.1 | MIT |
+| [setprototypeof](https://www.npmjs.com/package/setprototypeof/v/1.2.0) | 1.2.0 | ISC |
+| [shebang-command](https://www.npmjs.com/package/shebang-command/v/2.0.0) | 2.0.0 | MIT |
+| [shebang-regex](https://www.npmjs.com/package/shebang-regex/v/3.0.0) | 3.0.0 | MIT |
+| [side-channel](https://www.npmjs.com/package/side-channel/v/1.1.1) | 1.1.1 | MIT |
+| [side-channel-list](https://www.npmjs.com/package/side-channel-list/v/1.0.1) | 1.0.1 | MIT |
+| [side-channel-map](https://www.npmjs.com/package/side-channel-map/v/1.0.1) | 1.0.1 | MIT |
+| [side-channel-weakmap](https://www.npmjs.com/package/side-channel-weakmap/v/1.0.2) | 1.0.2 | MIT |
+| [statuses](https://www.npmjs.com/package/statuses/v/2.0.2) | 2.0.2 | MIT |
+| [toidentifier](https://www.npmjs.com/package/toidentifier/v/1.0.1) | 1.0.1 | MIT |
+| [type-is](https://www.npmjs.com/package/type-is/v/2.1.0) | 2.1.0 | MIT |
+| [unpipe](https://www.npmjs.com/package/unpipe/v/1.0.0) | 1.0.0 | MIT |
+| [vary](https://www.npmjs.com/package/vary/v/1.1.2) | 1.1.2 | MIT |
+| [which](https://www.npmjs.com/package/which/v/2.0.2) | 2.0.2 | ISC |
+| [wrappy](https://www.npmjs.com/package/wrappy/v/1.0.2) | 1.0.2 | ISC |
+| [zod](https://www.npmjs.com/package/zod/v/4.4.3) | 4.4.3 | MIT |
+| [zod-to-json-schema](https://www.npmjs.com/package/zod-to-json-schema/v/3.25.2) | 3.25.2 | ISC |

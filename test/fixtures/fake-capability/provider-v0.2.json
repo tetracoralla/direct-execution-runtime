@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "openadam.provider-manifest.v0.2",
+  "provider": {
+    "id": "test.fake-capability",
+    "name": "Fake Capability Provider",
+    "version": "0.1.0"
+  },
+  "implementations": [
+    {
+      "capabilityId": "org.openadam.test.echo",
+      "capabilityVersion": "0.1.0",
+      "adapter": {
+        "protocol": "openadam.capability-jsonl.v0.1",
+        "command": "./adapter.mjs",
+        "args": [],
+        "cwd": "."
+      },
+      "adapterBindings": [
+        {
+          "operationId": "echo",
+          "target": "adapter.mjs#echo"
+        }
+      ],
+      "transportSchemaProbe": {
+        "protocol": "openadam.transport-schema-jsonl.v0.1",
+        "command": "node",
+        "args": ["adapter.mjs"],
+        "cwd": "."
+      },
+      "bindings": [
+        {
+          "operationId": "echo",
+          "transport": "library",
+          "target": "fake#echo",
+          "contractSchemaDigests": {
+            "input": "sha256:e1144b10b0edd688aa16f57065a7d34306b1a40621b66fb4b3e7b697de170422",
+            "output": "sha256:f9f63074c73b6eb0802573aa5d2f692571f41fb19d18a70e5e1ef3e1eba80e50"
+          },
+          "transportSchemaDigests": {
+            "input": "sha256:e1144b10b0edd688aa16f57065a7d34306b1a40621b66fb4b3e7b697de170422"
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        }
+      ]
+    }
+  ]
+}

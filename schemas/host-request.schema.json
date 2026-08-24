@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:openadam:direct-host-request:v0.1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "id", "action"],
+      "properties": {
+        "schemaVersion": { "const": "openadam.direct-host-request.v0.1" },
+        "id": { "$ref": "#/$defs/id" },
+        "action": { "const": "inspect" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "id", "action", "workOrder"],
+      "properties": {
+        "schemaVersion": { "const": "openadam.direct-host-request.v0.1" },
+        "id": { "$ref": "#/$defs/id" },
+        "action": { "enum": ["validate", "run"] },
+        "workOrder": { "$ref": "urn:openadam:direct-work-order:v0.1" }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+    }
+  }
+}

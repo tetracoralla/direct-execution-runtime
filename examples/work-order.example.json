@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "openadam.direct-work-order.v0.1",
+  "id": "example-order",
+  "calls": [
+    {
+      "id": "example-call",
+      "providerId": "example.capability-provider",
+      "target": {
+        "kind": "capability",
+        "capabilityId": "org.example.capability",
+        "capabilityVersion": "1.0.0",
+        "operationId": "run"
+      },
+      "input": {}
+    },
+    {
+      "id": "example-procedure-call",
+      "providerId": "example.procedure-provider",
+      "target": {
+        "kind": "procedure",
+        "procedureId": "org.example.procedure",
+        "procedureVersion": "1.0.0"
+      },
+      "input": {}
+    }
+  ]
+}

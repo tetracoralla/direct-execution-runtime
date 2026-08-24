@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "openadam.procedure-profile.v0.3",
+  "id": "org.openadam.test.echo-procedure",
+  "version": "0.1.0",
+  "title": "Echo one value",
+  "summary": "Return one explicit value through a deterministic test Procedure.",
+  "lifecycle": "experimental",
+  "semantics": {
+    "resultVariability": "deterministic",
+    "contextSources": [],
+    "stateAccess": "none",
+    "idempotency": "idempotent"
+  },
+  "inputSchema": { "$ref": "./echo.input.schema.json" },
+  "outputSchema": { "$ref": "./echo.output.schema.json" },
+  "stages": [
+    {
+      "kind": "capability",
+      "id": "echo",
+      "title": "Echo",
+      "purpose": "Return the supplied value.",
+      "required": true,
+      "dependsOn": [],
+      "capability": {
+        "id": "org.openadam.test.echo",
+        "version": "0.1.0",
+        "operationId": "echo"
+      }
+    }
+  ],
+  "completion": {
+    "description": "Completion returns the echoed value.",
+    "outputStage": "echo"
+  },
+  "errors": [
+    {
+      "code": "FAKE_REJECTED",
+      "description": "The fake provider rejected the supplied value.",
+      "retryable": false
+    }
+  ]
+}

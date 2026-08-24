@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:openadam:schema:agent-tool-eval-direct-driver-result:v0.1",
+  "title": "Direct-host driver result v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "executionMode", "runId", "taskId", "repeat", "status", "runtime"],
+  "properties": {
+    "schemaVersion": { "const": "openadam.agent-tool-eval.direct-driver-result.v0.1" },
+    "executionMode": { "const": "direct-host" },
+    "runId": { "type": "string", "pattern": "^[a-zA-Z0-9._:-]+$", "maxLength": 300 },
+    "taskId": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "repeat": { "type": "integer", "minimum": 1, "maximum": 20 },
+    "status": { "enum": ["success", "error"] },
+    "answer": {},
+    "costUsd": { "type": "number", "minimum": 0 },
+    "error": { "$ref": "#/$defs/error" },
+    "runtime": { "$ref": "#/$defs/runtime" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "success" } }, "required": ["status"] },
+      "then": { "type": "object", "properties": { "answer": {}, "error": false }, "required": ["answer"] }
+    },
+    {
+      "if": { "properties": { "status": { "const": "error" } }, "required": ["status"] },
+      "then": { "type": "object", "properties": { "answer": false, "error": { "$ref": "#/$defs/error" } }, "required": ["error"] }
+    }
+  ],
+  "$defs": {
+    "ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 200 }
+      }
+    },
+    "semanticRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 100 }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["driver", "provider", "target"],
+      "properties": {
+        "driver": { "$ref": "#/$defs/semanticRef" },
+        "provider": { "$ref": "#/$defs/ref" },
+        "target": { "$ref": "#/$defs/ref" },
+        "capability": { "$ref": "#/$defs/semanticRef" },
+        "procedure": { "$ref": "#/$defs/semanticRef" }
+      },
+      "not": {
+        "properties": { "capability": {}, "procedure": {} },
+        "required": ["capability", "procedure"]
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 100 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "retryable": { "type": "boolean" }
+      }
+    }
+  }
+}

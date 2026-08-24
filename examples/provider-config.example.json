@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "openadam.direct-provider-config.v0.1",
+  "limits": {
+    "maxConcurrentCalls": 4,
+    "maxQueuedCalls": 32,
+    "maxWorkOrderCalls": 64,
+    "maxWorkOrderBytes": 262144,
+    "maxProviderResponseBytes": 262144,
+    "maxResultBytes": 524288,
+    "maxProtocolLineBytes": 1048576,
+    "maxStderrBytes": 32768,
+    "defaultTimeoutMs": 10000,
+    "circuitBreakerFailureThreshold": 3,
+    "circuitBreakerCooldownMs": 1000
+  },
+  "providers": [
+    {
+      "providerId": "example.capability-provider",
+      "transport": "capability-jsonl-v0.1",
+      "lifecycle": "persistent",
+      "rootPath": "/opt/provider/root",
+      "manifestPath": "/opt/provider/root/capabilities/provider.json",
+      "identityFiles": [
+        "/opt/provider/root/bin/capability-adapter"
+      ],
+      "capabilityId": "org.example.capability",
+      "capabilityVersion": "1.0.0",
+      "contracts": [
+        {
+          "operationId": "run",
+          "inputSchemaPath": "/opt/provider/root/capabilities/schemas/run.input.schema.json",
+          "outputSchemaPath": "/opt/provider/root/capabilities/schemas/run.output.schema.json"
+        }
+      ]
+    },
+    {
+      "providerId": "example.mcp-provider",
+      "transport": "mcp-stdio",
+      "lifecycle": "persistent",
+      "rootPath": "/opt/provider/root",
+      "command": "/opt/provider/root/bin/provider-mcp",
+      "args": [],
+      "cwd": "/opt/provider/root",
+      "identityFiles": [
+        "/opt/provider/root/bin/provider-mcp"
+      ],
+      "expectedServer": { "name": "Example Provider", "version": "1.0.0" },
+      "allowedTools": ["domain.run"]
+    },
+    {
+      "providerId": "example.procedure-provider",
+      "transport": "procedure-jsonl-v0.2",
+      "lifecycle": "persistent",
+      "rootPath": "/opt/procedure-provider/root",
+      "profilePath": "/opt/shared-profiles/example-procedure.v1.json",
+      "implementationManifestPath": "/opt/procedure-provider/root/procedure/implementation-manifest.json",
+      "identityFiles": [
+        "/opt/procedure-provider/root/bin/procedure-adapter"
+      ],
+      "procedureId": "org.example.procedure",
+      "procedureVersion": "1.0.0",
+      "inputSchemaPath": "/opt/procedure-provider/root/contracts/procedure.input.schema.json",
+      "outputSchemaPath": "/opt/procedure-provider/root/contracts/procedure.output.schema.json"
+    }
+  ]
+}

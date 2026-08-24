@@ -1,0 +1,8 @@
+node_modules/
+.verify/
+build/
+coverage/
+.local/
+*.sock
+*.log
+.DS_Store
