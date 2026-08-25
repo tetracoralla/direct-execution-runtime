@@ -23,6 +23,17 @@ const procedureProfilePath = resolve(
   'procedure-contracts/catalog/procedures/package-dependency-change-preflight.v0.1.json',
 )
 
+function projectVersion(projectToml) {
+  const projectStart = projectToml.indexOf('[project]')
+  if (projectStart === -1) throw new Error('Math Anchor project metadata has no [project] section')
+  const projectSection = projectToml.slice(projectStart + '[project]'.length).split(/^\[/mu)[0]
+  const match = projectSection.match(/^\s*version\s*=\s*"([^"]+)"\s*$/mu)
+  if (match === null) throw new Error('Math Anchor project metadata has no project version')
+  return match[1]
+}
+
+const mathAnchorVersion = projectVersion(await readFile(resolve(calculatorRoot, 'pyproject.toml'), 'utf8'))
+
 function waitForJsonLine(child, timeoutMs = 15_000) {
   return new Promise((resolvePromise, reject) => {
     let stdout = ''
@@ -118,7 +129,7 @@ function providers(dependencyLifecycle = 'persistent') {
         resolve(calculatorRoot, 'src/math_anchor/mcp_server.py'),
         resolve(calculatorRoot, 'pyproject.toml'),
       ],
-      expectedServer: { name: 'Math Anchor', version: '1.29.0' },
+      expectedServer: { name: 'Math Anchor', version: mathAnchorVersion },
       allowedTools: ['math.run', 'math.batch'],
     },
     {
