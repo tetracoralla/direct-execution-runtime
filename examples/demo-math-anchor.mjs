@@ -83,14 +83,15 @@ async function timed(runtime, order) {
   }
 }
 
-async function installedMcpVersion(python) {
+async function installedProviderVersion(python, projectManifest) {
   const { stdout } = await execFileAsync(python, [
     '-c',
-    "import importlib.metadata as metadata; print(metadata.version('mcp'))",
+    "import sys, tomllib; print(tomllib.load(open(sys.argv[1], 'rb'))['project']['version'])",
+    projectManifest,
   ], { encoding: 'utf8', timeout: 10_000 })
   const version = stdout.trim()
   if (!/^\d+\.\d+\.\d+(?:[-+].+)?$/u.test(version)) {
-    throw new Error('Math Anchor environment returned an invalid MCP server version')
+    throw new Error('Math Anchor project returned an invalid provider version')
   }
   return version
 }
@@ -119,7 +120,7 @@ async function main() {
   const serverSource = resolve(root, 'src/math_anchor/mcp_server.py')
   const projectManifest = resolve(root, 'pyproject.toml')
   await Promise.all([command, python, serverSource, projectManifest].map((path) => access(path)))
-  const expectedServerVersion = await installedMcpVersion(python)
+  const expectedServerVersion = await installedProviderVersion(python, projectManifest)
 
   const prepared = await prepareRuntimeConfig({
     schemaVersion: 'openadam.direct-provider-config.v0.1',
@@ -193,7 +194,7 @@ async function main() {
         providerError: {
           status: providerError.result.calls[0].status,
           code: providerError.result.calls[0].error.code,
-          retryable: providerError.result.calls[0].error.retryable,
+          retryable: providerError.result.calls[0].error.retryable ?? null,
         },
         hostSchemaRejection: {
           status: hostRejection.result.calls[0].status,
