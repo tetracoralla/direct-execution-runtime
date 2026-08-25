@@ -51,6 +51,7 @@
     "check": "npm run check:syntax && npm test && npm run check:legal && npm run check:repository && npm run check:package",
     "check:package": "node scripts/check-package.mjs",
     "check:local-pilots": "node scripts/check-local-pilots.mjs",
+    "demo:math-anchor": "node examples/demo-math-anchor.mjs",
     "audit:production": "npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org"
   },
   "dependencies": {

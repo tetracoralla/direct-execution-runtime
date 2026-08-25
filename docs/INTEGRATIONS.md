@@ -19,6 +19,12 @@ These names identify independent products; they do not make either provider a
 dependency bundled with this runtime. Users must install and configure the
 provider separately.
 
+The public Math Anchor path is executable through
+[`docs/PUBLIC_DEMO.md`](PUBLIC_DEMO.md). It reacquires the provider's live MCP
+schema and runs without tracked local configuration. This is a direct-route
+demonstration, not an Agent comparison or compatibility claim for every Math
+Anchor release.
+
 ## Maintainer-only local pilot
 
 Dependency Preflight exercises Procedure JSONL and short-lived Capability JSONL

@@ -24,7 +24,8 @@ async function files(directory) {
 const allFiles = await files(root)
 for (const required of [
   'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'CONTRIBUTING.md',
-  'README.md', 'docs/INTEGRATIONS.md', 'schemas/README.md',
+  'README.md', 'docs/INTEGRATIONS.md', 'docs/PUBLIC_DEMO.md',
+  'examples/demo-math-anchor.mjs', 'schemas/README.md',
   '.github/workflows/ci.yml', '.github/workflows/codeql.yml', '.github/dependabot.yml',
 ]) {
   if (!allFiles.includes(resolve(root, required))) throw new Error(`public repository file is absent: ${required}`)
@@ -54,6 +55,9 @@ if (
   allFiles.includes(resolve(root, 'scripts/check-real-providers.mjs'))
 ) {
   throw new Error('maintainer pilot entry point must retain its explicit local-only identity')
+}
+if (packageJson.scripts?.['demo:math-anchor'] !== 'node examples/demo-math-anchor.mjs') {
+  throw new Error('public Math Anchor demo entry point is absent or drifted')
 }
 const packageLock = parseStrictJson(await readFile(resolve(root, 'package-lock.json'), 'utf8'), 'package-lock.json')
 const lockedRoot = packageLock.packages?.['']

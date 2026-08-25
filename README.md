@@ -78,6 +78,23 @@ That does not restrict an Apache-2.0 GitHub source release. `npm pack` produces
 an installable tarball and `npm run check:package` verifies that tarball in an
 isolated consumer directory.
 
+## Public five-minute path
+
+The smallest real-provider walkthrough uses the public
+[Math Anchor](https://github.com/tetracoralla/math-anchor) MCP provider. After
+installing both repositories' dependencies, run:
+
+```sh
+npm run demo:math-anchor -- --provider-root /absolute/path/to/math-anchor
+```
+
+It prints one current JSON observation containing an exact result, a
+provider-owned error, a host-side schema rejection, and separate first-call and
+persistent-session timings. It invokes no model, writes no report, and does not
+claim that an unmeasured Agent route saved tokens. See
+[`docs/PUBLIC_DEMO.md`](docs/PUBLIC_DEMO.md) for the complete clone-to-run path
+and interpretation boundary.
+
 ## Provider configuration
 
 Provider configuration is current-machine state and normally stays outside
