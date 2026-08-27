@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { boundedMessage, HostError } from '../errors.mjs'
 import { digestJson, jsonBytes } from '../json.mjs'
+import { prepareMcpOperationProjection, projectMcpOperation } from '../operation-projection.mjs'
 import { assertSchema, createValidator } from '../schema.mjs'
 
 function safeAnnotations(tool) {
@@ -12,6 +13,19 @@ function safeAnnotations(tool) {
     annotations.idempotentHint === true &&
     annotations.openWorldHint === false
   )
+}
+
+function ordinaryObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function valueAtPath(value, path) {
+  let current = value
+  for (const field of path) {
+    if (!ordinaryObject(current) || !Object.hasOwn(current, field)) return undefined
+    current = current[field]
+  }
+  return current
 }
 
 async function awaitWithDeadline(promise, { signal, deadlineAt } = {}) {
@@ -157,16 +171,47 @@ export class McpSession {
         const tool = listed.tools.find((candidate) => candidate.name === name)
         if (tool === undefined) throw new HostError('HOST_BINDING_INVALID', `Allowed MCP tool ${name} is absent from the live server`)
         if (!safeAnnotations(tool)) {
-          throw new HostError('HOST_BINDING_UNSAFE', `MCP tool ${name} is outside the v0.1 read-only execution boundary`)
+          throw new HostError('HOST_BINDING_UNSAFE', `MCP tool ${name} is outside the direct read-only execution boundary`)
         }
         if (tool.inputSchema === undefined || tool.outputSchema === undefined) {
           throw new HostError('HOST_BINDING_INVALID', `MCP tool ${name} must advertise input and output schemas`)
         }
+        const projectionDeclaration = this.binding.projectionDefinitions.get(name)
         selected.set(name, {
           tool,
-          validateInput: ajv.compile(tool.inputSchema),
+          validateInput: projectionDeclaration === undefined ? ajv.compile(tool.inputSchema) : null,
           validateOutput: ajv.compile(tool.outputSchema),
+          contractDigest: digestJson({
+            serverVersion,
+            name: tool.name,
+            inputSchema: tool.inputSchema,
+            outputSchema: tool.outputSchema,
+            annotations: tool.annotations ?? {},
+          }),
+          operationProjection: projectionDeclaration === undefined
+            ? null
+            : prepareMcpOperationProjection(tool, projectionDeclaration),
+          compileInput: (schema) => ajv.compile(schema),
+          batchProjection: null,
         })
+      }
+      for (const [batchToolName, declaration] of this.binding.batchProjectionDefinitions) {
+        const batch = selected.get(batchToolName)
+        const source = selected.get(declaration.toolName)
+        const items = batch?.tool.inputSchema?.properties?.[declaration.batchItemsField]
+        if (
+          batch === undefined || source?.operationProjection === null ||
+          items?.type !== 'array' || !items.items
+        ) {
+          throw new HostError(
+            'HOST_BINDING_INVALID',
+            `MCP batch projection ${batchToolName} does not expose the declared item array`,
+          )
+        }
+        batch.batchProjection = {
+          sourceToolName: declaration.toolName,
+          itemsField: declaration.batchItemsField,
+        }
       }
       if (this.#transport !== transport) {
         await client.close().catch(() => {})
@@ -205,14 +250,166 @@ export class McpSession {
   }
 
   async validateCall(call, options = {}) {
-    if (call.target.kind !== 'mcp-tool') {
-      throw new HostError('HOST_BINDING_MISMATCH', 'Call target is not an MCP tool')
+    if (!['mcp-tool', 'mcp-operation'].includes(call.target.kind)) {
+      throw new HostError('HOST_BINDING_MISMATCH', 'Call target is not an MCP tool or projected operation')
     }
     await this.ensureStarted(options)
     const selected = this.#tools.get(call.target.toolName)
     if (selected === undefined) throw new HostError('HOST_UNKNOWN_OPERATION', `MCP tool ${call.target.toolName} is not admitted`)
+    if (call.target.kind === 'mcp-operation') {
+      if (selected.operationProjection === null) {
+        throw new HostError('HOST_BINDING_MISMATCH', `MCP tool ${call.target.toolName} has no operation projection`)
+      }
+      const operationField = selected.operationProjection.declaration.operationField
+      if (call.input[operationField] !== call.target.operationId) {
+        throw new HostError('HOST_BINDING_MISMATCH', 'Projected MCP target and input operation differ')
+      }
+      const projected = await this.#projectOperation(selected, call.target.operationId, options)
+      assertSchema(projected.validateInput, call.input, 'HOST_INPUT_INVALID', `${call.target.operationId} input`)
+      return { ...selected, contractDigest: projected.contractDigest }
+    }
+    if (selected.operationProjection !== null) {
+      throw new HostError(
+        'HOST_BINDING_MISMATCH',
+        `MCP tool ${call.target.toolName} requires an explicit mcp-operation target`,
+      )
+    }
     assertSchema(selected.validateInput, call.input, 'HOST_INPUT_INVALID', `${call.target.toolName} input`)
+    if (selected.batchProjection !== null) {
+      const source = this.#tools.get(selected.batchProjection.sourceToolName)
+      const items = call.input[selected.batchProjection.itemsField]
+      const itemContracts = []
+      for (let index = 0; index < items.length; index += 1) {
+        const operationField = source.operationProjection.declaration.operationField
+        const operationId = items[index][operationField]
+        if (typeof operationId !== 'string') {
+          throw new HostError('HOST_INPUT_INVALID', `Batch item ${index} has no operation identity`)
+        }
+        const projected = await this.#projectOperation(source, operationId, options)
+        assertSchema(projected.validateInput, items[index], 'HOST_INPUT_INVALID', `batch item ${index} ${operationId}`)
+        itemContracts.push(projected.contractDigest)
+      }
+      return {
+        ...selected,
+        contractDigest: digestJson({ batchContract: selected.contractDigest, itemContracts: [...new Set(itemContracts)].sort() }),
+      }
+    }
     return selected
+  }
+
+  async #projectOperation(selected, operationId, options = {}) {
+    const prepared = selected.operationProjection
+    const cached = prepared.cache.get(operationId)
+    if (cached !== undefined) return cached
+    if (!prepared.operationIds.has(operationId)) {
+      throw new HostError('HOST_UNKNOWN_OPERATION', `Unknown projected MCP operation ${operationId}`)
+    }
+    let projectionOptions = {}
+    if (prepared.branches === null) {
+      projectionOptions = await this.#lookupOperationSchema(prepared.declaration.schemaLookup, operationId, options)
+    }
+    const projected = projectMcpOperation(selected.tool, prepared, operationId, projectionOptions)
+    if (projected.validateInput === undefined) {
+      projected.validateInput = selected.compileInput(projected.inputSchema)
+    }
+    return projected
+  }
+
+  async #lookupOperationSchema(declaration, operationId, options) {
+    const selected = this.#tools.get(declaration.toolName)
+    if (selected === undefined || selected.operationProjection !== null) {
+      throw new HostError('HOST_BINDING_INVALID', `MCP schema lookup tool ${declaration.toolName} is unavailable`)
+    }
+    const input = { [declaration.operationField]: operationId }
+    assertSchema(selected.validateInput, input, 'HOST_BINDING_INVALID', `${declaration.toolName} schema lookup input`)
+    const deadlineAt = options.deadlineAt ?? Date.now() + this.binding.limits.defaultTimeoutMs
+    const remaining = deadlineAt - Date.now()
+    if (remaining <= 0) throw new HostError('HOST_TIMEOUT', 'Call deadline expired before MCP schema lookup')
+    let response
+    try {
+      response = await this.#client.callTool(
+        { name: declaration.toolName, arguments: input },
+        undefined,
+        { signal: options.signal, timeout: remaining, maxTotalTimeout: remaining },
+      )
+    } catch (error) {
+      const cancelled = options.signal?.aborted === true
+      const timeout = !cancelled && Date.now() >= deadlineAt
+      const message = error instanceof Error ? error.message : String(error)
+      await this.close()
+      if (cancelled) throw new HostError('HOST_CANCELLED', 'MCP schema lookup was cancelled', { cause: error })
+      if (timeout || /timed? ?out|timeout/i.test(error instanceof Error ? error.message : String(error))) {
+        throw new HostError('HOST_TIMEOUT', 'MCP schema lookup exceeded its whole-call deadline', { cause: error, retryable: true })
+      }
+      if (/structured content does not match.+output schema/iu.test(message)) {
+        throw new HostError('HOST_PROVIDER_OUTPUT_INVALID', 'MCP schema lookup returned content outside its advertised output contract', { cause: error })
+      }
+      throw new HostError('HOST_TRANSPORT_ERROR', boundedMessage(message), {
+        cause: error,
+        retryable: true,
+      })
+    }
+    if (jsonBytes(response) > this.binding.limits.maxProviderResponseBytes) {
+      await this.close()
+      throw new HostError('HOST_PROVIDER_RESPONSE_TOO_LARGE', 'MCP schema lookup response exceeds the configured byte limit')
+    }
+    const structured = response.structuredContent
+    if (structured === undefined) {
+      await this.close()
+      throw new HostError('HOST_PROVIDER_PROTOCOL_ERROR', 'MCP schema lookup returned no structuredContent')
+    }
+    assertSchema(selected.validateOutput, structured, 'HOST_PROVIDER_OUTPUT_INVALID', `${declaration.toolName} output`)
+    if (response.isError === true) {
+      throw new HostError('HOST_BINDING_INVALID', `MCP schema lookup rejected operation ${operationId}`)
+    }
+    const argumentsSchema = valueAtPath(structured, declaration.resultPath)
+    if (!ordinaryObject(argumentsSchema)) {
+      throw new HostError('HOST_BINDING_INVALID', `MCP schema lookup returned no input schema for ${operationId}`)
+    }
+    this.#lastResponseAt = new Date().toISOString()
+    return {
+      argumentsSchema,
+      schemaLookupContractDigest: selected.contractDigest,
+    }
+  }
+
+  async projectContract(target, options = {}) {
+    await this.ensureStarted(options)
+    const selected = this.#tools.get(target.toolName)
+    if (selected === undefined) throw new HostError('HOST_UNKNOWN_OPERATION', `MCP tool ${target.toolName} is not admitted`)
+    if (target.kind === 'mcp-operation') {
+      if (selected.operationProjection === null) {
+        throw new HostError('HOST_BINDING_MISMATCH', `MCP tool ${target.toolName} has no operation projection`)
+      }
+      const projected = await this.#projectOperation(selected, target.operationId, options)
+      return {
+        inputSchema: structuredClone(projected.inputSchema),
+        outputSchema: structuredClone(projected.outputSchema),
+        errors: projected.errorSchema === null
+          ? null
+          : { source: 'tool-output-schema', schema: structuredClone(projected.errorSchema) },
+        contractDigest: projected.contractDigest,
+        contractSource: 'live-session',
+        schemaBytes: projected.schemaBytes,
+      }
+    }
+    if (target.kind !== 'mcp-tool') {
+      throw new HostError('HOST_BINDING_MISMATCH', 'Projection target is not an MCP tool')
+    }
+    if (selected.operationProjection !== null) {
+      throw new HostError(
+        'HOST_BINDING_MISMATCH',
+        `MCP tool ${target.toolName} requires a selected operation before projection`,
+      )
+    }
+    return {
+      inputSchema: structuredClone(selected.tool.inputSchema),
+      outputSchema: structuredClone(selected.tool.outputSchema),
+      errors: null,
+      contractDigest: selected.contractDigest,
+      contractSource: 'live-session',
+      schemaBytes: jsonBytes(selected.tool.inputSchema) + jsonBytes(selected.tool.outputSchema),
+    }
   }
 
   async invoke(call, { signal, deadlineAt }) {
@@ -275,7 +472,7 @@ export class McpSession {
         error,
         sessionState,
         providerRoundTripMs: performance.now() - started,
-        contractDigest: this.#contractDigest,
+        contractDigest: selected.contractDigest,
       }
     }
     return {
@@ -283,7 +480,7 @@ export class McpSession {
       result: structured,
       sessionState,
       providerRoundTripMs: performance.now() - started,
-      contractDigest: this.#contractDigest,
+      contractDigest: selected.contractDigest,
     }
   }
 
@@ -297,6 +494,8 @@ export class McpSession {
       pid: this.pid,
       generation: this.#generation,
       liveContractDigest: this.#contractDigest ?? null,
+      projectedOperationContracts: [...this.#tools.values()]
+        .reduce((total, selected) => total + (selected.operationProjection?.cache.size ?? 0), 0),
     }
   }
 

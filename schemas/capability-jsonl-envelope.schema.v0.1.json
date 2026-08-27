@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openadam.org/schemas/capability-jsonl-envelope.schema.v0.1.json",
+  "title": "openAdam Capability JSONL v0.1 envelope",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/success" },
+    { "$ref": "#/$defs/error" }
+  ],
+  "$defs": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "operationId", "input"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "operationId": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "input": true
+      }
+    },
+    "success": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "ok", "result"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "ok": { "const": true },
+        "result": true
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "ok", "error"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "ok": { "const": false },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+            "message": { "type": "string", "minLength": 1 },
+            "retryable": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}

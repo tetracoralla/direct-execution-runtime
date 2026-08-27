@@ -45,7 +45,7 @@ function waitForJsonLine(child, timeoutMs = 10_000) {
 
 function packagedProviderConfig(fakeRoot) {
   return {
-    schemaVersion: 'openadam.direct-provider-config.v0.1',
+    schemaVersion: 'openadam.direct-provider-config.v0.2',
     limits: {
       maxConcurrentCalls: 2,
       maxQueuedCalls: 4,
@@ -64,6 +64,7 @@ function packagedProviderConfig(fakeRoot) {
       transport: 'capability-jsonl-v0.1',
       lifecycle: 'persistent',
       rootPath: fakeRoot,
+      profilePath: resolve(fakeRoot, 'capability-profile.json'),
       manifestPath: resolve(fakeRoot, 'provider.json'),
       identityFiles: [resolve(fakeRoot, 'adapter.mjs')],
       capabilityId: 'org.openadam.test.echo',
@@ -125,14 +126,17 @@ try {
     'schemas/host-request.schema.json',
     'schemas/host-response.schema.json',
     'schemas/host-service-observation.schema.json',
+    'schemas/contract-selection.schema.json',
+    'schemas/execution-observation.schema.json',
     'schemas/evals-direct-driver-request.schema.json',
     'schemas/evals-direct-driver-result.schema.json',
     'schemas/provider-config.schema.json',
     'schemas/work-order.schema.json',
-    'schemas/provider-manifest.schema.v0.1.json',
-    'schemas/provider-manifest.schema.v0.2.json',
-    'schemas/procedure-profile.schema.v0.3.json',
-    'schemas/procedure-implementation-manifest.schema.v0.4.json',
+    'schemas/capability-profile.schema.v0.3.json',
+    'schemas/capability-jsonl-envelope.schema.v0.1.json',
+    'schemas/provider-manifest.schema.v0.3.json',
+    'schemas/procedure-profile.schema.v0.5.json',
+    'schemas/procedure-implementation-manifest.schema.v0.5.json',
   ]) {
     if (!paths.includes(required)) throw new Error(`required package file is absent: ${required}`)
   }
@@ -145,7 +149,7 @@ try {
   await execFileAsync(process.execPath, [
     '--input-type=module',
     '--eval',
-    "import('@openadam/direct-execution-runtime').then((module) => { if (typeof module.DirectExecutionRuntime !== 'function' || typeof module.DirectHostService !== 'function' || typeof module.requestDirectHost !== 'function' || module.EVALS_DRIVER_VERSION !== '0.1.0') process.exit(2) })",
+    "import('@openadam/direct-execution-runtime').then((module) => { if (typeof module.DirectExecutionRuntime !== 'function' || typeof module.DirectHostService !== 'function' || typeof module.requestDirectHost !== 'function' || typeof module.JsonlObservationSink !== 'function' || module.EVALS_DRIVER_VERSION !== '0.1.0') process.exit(2) })",
   ], { cwd: consumer, maxBuffer: 1024 * 1024 })
 
   const fakeRoot = resolve(root, 'test/fixtures/fake-capability')

@@ -11,6 +11,7 @@ import { requestDirectHost } from '../src/host-client.mjs'
 import { DirectHostService } from '../src/host-service.mjs'
 import { jsonBytes } from '../src/json.mjs'
 import { DirectExecutionRuntime } from '../src/runtime.mjs'
+import { JsonlObservationSink } from '../src/observations.mjs'
 
 const execFileAsync = promisify(execFile)
 const root = fileURLToPath(new URL('../', import.meta.url))
@@ -18,10 +19,32 @@ const workspace = resolve(root, '..')
 const calculatorRoot = resolve(workspace, 'calculator')
 const timeRoot = resolve(workspace, 'migratory-time')
 const dependencyRoot = resolve(workspace, 'dependency-preflight')
+const structuredRoot = resolve(workspace, 'structured-data-preflight')
 const procedureProfilePath = resolve(
   workspace,
-  'procedure-contracts/catalog/procedures/package-dependency-change-preflight.v0.1.json',
+  'procedure-contracts/catalog/procedures/package-dependency-change-preflight.v0.2.json',
 )
+const timeCapabilityProfilePath = resolve(
+  workspace,
+  'capability-contracts/catalog/capabilities/time-zone-convert.v0.2.json',
+)
+const dependencyCapabilityProfilePath = resolve(
+  workspace,
+  'capability-contracts/catalog/capabilities/package-dependency-evaluate.v0.1.json',
+)
+const structuredProcedureProfilePath = resolve(
+  workspace,
+  'procedure-contracts/catalog/procedures/structured-data-preflight.v0.3.json',
+)
+const observationLogPath = process.env.OPENADAM_DIRECT_OBSERVATION_LOG
+
+function createRuntime(preparedConfig) {
+  return new DirectExecutionRuntime(preparedConfig, {
+    ...(observationLogPath === undefined ? {} : {
+      observationSink: new JsonlObservationSink(resolve(observationLogPath)),
+    }),
+  })
+}
 
 function projectVersion(projectToml) {
   const projectStart = projectToml.indexOf('[project]')
@@ -69,20 +92,24 @@ function waitForJsonLine(child, timeoutMs = 15_000) {
 
 for (const { bundledName, canonicalPath } of [
   {
-    bundledName: 'provider-manifest.schema.v0.1.json',
-    canonicalPath: resolve(workspace, 'capability-contracts/schemas/provider-manifest.schema.json'),
+    bundledName: 'capability-profile.schema.v0.3.json',
+    canonicalPath: resolve(workspace, 'capability-contracts/schemas/capability-profile.schema.v0.3.json'),
   },
   {
-    bundledName: 'provider-manifest.schema.v0.2.json',
-    canonicalPath: resolve(workspace, 'capability-contracts/schemas/provider-manifest.schema.v0.2.json'),
+    bundledName: 'capability-jsonl-envelope.schema.v0.1.json',
+    canonicalPath: resolve(workspace, 'capability-contracts/schemas/capability-jsonl-envelope.schema.v0.1.json'),
   },
   {
-    bundledName: 'procedure-profile.schema.v0.3.json',
-    canonicalPath: resolve(workspace, 'procedure-contracts/schemas/procedure-profile.schema.v0.3.json'),
+    bundledName: 'provider-manifest.schema.v0.3.json',
+    canonicalPath: resolve(workspace, 'capability-contracts/schemas/provider-manifest.schema.v0.3.json'),
   },
   {
-    bundledName: 'procedure-implementation-manifest.schema.v0.4.json',
-    canonicalPath: resolve(workspace, 'procedure-contracts/schemas/procedure-implementation-manifest.schema.v0.4.json'),
+    bundledName: 'procedure-profile.schema.v0.5.json',
+    canonicalPath: resolve(workspace, 'procedure-contracts/schemas/procedure-profile.schema.v0.5.json'),
+  },
+  {
+    bundledName: 'procedure-implementation-manifest.schema.v0.5.json',
+    canonicalPath: resolve(workspace, 'procedure-contracts/schemas/procedure-implementation-manifest.schema.v0.5.json'),
   },
   {
     bundledName: 'evals-direct-driver-request.schema.json',
@@ -130,13 +157,26 @@ function providers(dependencyLifecycle = 'persistent') {
         resolve(calculatorRoot, 'pyproject.toml'),
       ],
       expectedServer: { name: 'Math Anchor', version: mathAnchorVersion },
-      allowedTools: ['math.run', 'math.batch'],
+      allowedTools: ['math.run', 'math.batch', 'math.describe'],
+      operationProjections: [{
+        toolName: 'math.run',
+        operationField: 'operation',
+        argumentsField: 'arguments',
+        batchToolName: 'math.batch',
+        batchItemsField: 'items',
+        schemaLookup: {
+          toolName: 'math.describe',
+          operationField: 'operation',
+          resultPath: ['operation', 'inputSchema'],
+        },
+      }],
     },
     {
       providerId: 'io.github.tetracoralla.migratory-time',
       transport: 'capability-jsonl-v0.1',
       lifecycle: 'persistent',
       rootPath: timeRoot,
+      profilePath: timeCapabilityProfilePath,
       manifestPath: resolve(timeRoot, 'capabilities/provider.json'),
       identityFiles: [resolve(timeRoot, 'scripts/runCapabilityAdapter.mjs')],
       capabilityId: 'org.openadam.time-zone.convert',
@@ -156,7 +196,7 @@ function providers(dependencyLifecycle = 'persistent') {
       implementationManifestPath: resolve(dependencyRoot, 'procedure/implementation-manifest.json'),
       identityFiles: [resolve(dependencyRoot, 'src/procedure-adapter.mjs')],
       procedureId: 'org.openadam.package-dependency.change-preflight',
-      procedureVersion: '0.1.0',
+      procedureVersion: '0.2.0',
       inputSchemaPath: resolve(dependencyRoot, 'contracts/schemas/package-dependency.change-preflight.input.schema.json'),
       outputSchemaPath: resolve(dependencyRoot, 'contracts/schemas/package-dependency.change-preflight.output.schema.json'),
     },
@@ -169,6 +209,7 @@ function dependencyCapabilityProvider(lifecycle = 'per-call') {
     transport: 'capability-jsonl-v0.1',
     lifecycle,
     rootPath: dependencyRoot,
+    profilePath: dependencyCapabilityProfilePath,
     manifestPath: resolve(dependencyRoot, 'capabilities/provider.json'),
     identityFiles: [resolve(dependencyRoot, 'src/capability-adapter.mjs')],
     capabilityId: 'org.openadam.package-dependency.evaluate',
@@ -181,15 +222,35 @@ function dependencyCapabilityProvider(lifecycle = 'per-call') {
   }
 }
 
+function structuredProcedureProvider() {
+  return {
+    providerId: 'org.openadam.structured-data-preflight',
+    transport: 'procedure-jsonl-v0.2',
+    lifecycle: 'persistent',
+    rootPath: structuredRoot,
+    profilePath: structuredProcedureProfilePath,
+    implementationManifestPath: resolve(structuredRoot, 'procedure/implementation-manifest.json'),
+    identityFiles: [resolve(structuredRoot, 'src/structured_data_preflight/adapter.py')],
+    procedureId: 'org.openadam.structured-data.preflight',
+    procedureVersion: '0.3.0',
+    inputSchemaPath: resolve(structuredRoot, 'src/structured_data_preflight/schemas/structured-data.preflight.input.schema.json'),
+    outputSchemaPath: resolve(structuredRoot, 'src/structured_data_preflight/schemas/structured-data.preflight.output.schema.json'),
+  }
+}
+
 function config(selectedProviders = providers()) {
-  return { schemaVersion: 'openadam.direct-provider-config.v0.1', limits, providers: selectedProviders }
+  return { schemaVersion: 'openadam.direct-provider-config.v0.2', limits, providers: selectedProviders }
 }
 
 function mathCall(id = 'math') {
   return {
     id,
     providerId: 'io.github.tetracoralla.math-anchor',
-    target: { kind: 'mcp-tool', toolName: 'math.run' },
+    target: {
+      kind: 'mcp-operation',
+      toolName: 'math.run',
+      operationId: 'expression.evaluate',
+    },
     input: { operation: 'expression.evaluate', arguments: { expression: '6*7' } },
   }
 }
@@ -220,7 +281,7 @@ function dependencyCall(id = 'dependency') {
     target: {
       kind: 'procedure',
       procedureId: 'org.openadam.package-dependency.change-preflight',
-      procedureVersion: '0.1.0',
+      procedureVersion: '0.2.0',
     },
     input: {
       dependency: 'ajv',
@@ -251,6 +312,21 @@ function dependencyCapabilityCall(id = 'dependency-capability') {
       packagePresent: true,
       resolvedVersion: '8.20.0',
     },
+  }
+}
+
+function structuredProcedureCall(id, validation) {
+  const input = { path: 'fixtures/users.json', sample_rows: 1, select: 'data.users[*]' }
+  if (validation !== undefined) input.validation = validation
+  return {
+    id,
+    providerId: 'org.openadam.structured-data-preflight',
+    target: {
+      kind: 'procedure',
+      procedureId: 'org.openadam.structured-data.preflight',
+      procedureVersion: '0.3.0',
+    },
+    input,
   }
 }
 
@@ -294,7 +370,7 @@ async function coldRoute(provider, makeCall, repetitions = 3) {
   const samples = []
   const bytes = []
   for (let index = 0; index < repetitions; index += 1) {
-    const runtime = new DirectExecutionRuntime(await prepareRuntimeConfig(config([provider])))
+    const runtime = createRuntime(await prepareRuntimeConfig(config([provider])))
     try {
       const measured = await timed(runtime, order(`cold-${index}`, [makeCall(makeCall().id)]))
       if (measured.result.calls[0].status !== 'ok') throw new Error(`cold route failed for ${provider.providerId}`)
@@ -328,8 +404,32 @@ async function processTreeRss(rootPids) {
   return { processes: included.size, rssKiB: [...included].reduce((total, pid) => total + (rss.get(pid) ?? 0), 0) }
 }
 
+const conditionalRuntime = createRuntime(
+  await prepareRuntimeConfig(config([structuredProcedureProvider()])),
+)
+let conditionalProcedure
+try {
+  const conditionalResult = await conditionalRuntime.runWorkOrder(order('conditional-procedure', [
+    structuredProcedureCall('without-validation'),
+    structuredProcedureCall('with-validation', { assertions: [{ id: 'has-rows', type: 'row_count', min: 1 }] }),
+  ]))
+  if (conditionalResult.summary.failed !== 0) {
+    throw new Error('conditional Procedure did not execute both completion branches')
+  }
+  conditionalProcedure = {
+    calls: conditionalResult.calls.length,
+    withoutValidation: !Object.hasOwn(conditionalResult.calls[0].result ?? {}, 'validation'),
+    withValidation: conditionalResult.calls[1].result?.validation?.valid === true,
+  }
+  if (!conditionalProcedure.withoutValidation || !conditionalProcedure.withValidation) {
+    throw new Error('conditional Procedure returned the wrong completion payload')
+  }
+} finally {
+  await conditionalRuntime.close()
+}
+
 const prepared = await prepareRuntimeConfig(config())
-const runtime = new DirectExecutionRuntime(prepared)
+const runtime = createRuntime(prepared)
 let report
 const observedRootPids = new Set()
 try {
@@ -378,7 +478,11 @@ try {
   const cancelled = await runtime.runWorkOrder(order('cancel-mcp', [{
     id: 'cancelled-math',
     providerId: 'io.github.tetracoralla.math-anchor',
-    target: { kind: 'mcp-tool', toolName: 'math.run' },
+    target: {
+      kind: 'mcp-operation',
+      toolName: 'math.run',
+      operationId: 'numeric.integrate',
+    },
     input: {
       operation: 'numeric.integrate',
       arguments: {
@@ -434,7 +538,7 @@ try {
   }
 
   const mathDefinition = definitions.find((provider) => provider.providerId === 'io.github.tetracoralla.math-anchor')
-  const startupRuntime = new DirectExecutionRuntime(await prepareRuntimeConfig(config([mathDefinition])))
+  const startupRuntime = createRuntime(await prepareRuntimeConfig(config([mathDefinition])))
   let startupDeadline
   try {
     const startupCall = mathCall('startup-timeout')
@@ -457,7 +561,7 @@ try {
   }
 
   const perCallDefinition = dependencyCapabilityProvider('per-call')
-  const perCallRuntime = new DirectExecutionRuntime(await prepareRuntimeConfig(config([perCallDefinition])))
+  const perCallRuntime = createRuntime(await prepareRuntimeConfig(config([perCallDefinition])))
   let perCall
   try {
     perCall = await perCallRuntime.runWorkOrder(order('per-call-jsonl', [
@@ -493,7 +597,7 @@ try {
 
   const hostDirectory = await mkdtemp(resolve(tmpdir(), 'direct-exec-real-host-'))
   const hostSocketPath = resolve(hostDirectory, 'runtime.sock')
-  const hostRuntime = new DirectExecutionRuntime(await prepareRuntimeConfig(config()))
+  const hostRuntime = createRuntime(await prepareRuntimeConfig(config()))
   const hostService = new DirectHostService(hostRuntime, { socketPath: hostSocketPath })
   let hostServiceSmoke
   let evalsSmoke
@@ -550,7 +654,7 @@ try {
           id: 'expression.evaluate',
           tags: ['local-pilot'],
           invocation: {
-            operationId: 'math.run',
+            operationId: 'expression.evaluate',
             input: { operation: 'expression.evaluate', arguments: { expression: '6*7' } },
           },
           evaluator: {
@@ -591,8 +695,9 @@ try {
             '--provider-version', providerRef.version,
             '--target-id', targetRef.id,
             '--target-version', targetRef.version,
-            '--target-kind', 'mcp-tool',
-            '--operation-id', 'math.run',
+            '--target-kind', 'mcp-operation',
+            '--tool-name', 'math.run',
+            '--operation-id', 'expression.evaluate',
           ],
         },
         oracleIsolation: { mode: 'deny-read-roots' },
@@ -728,7 +833,7 @@ try {
       modelCallsInsideRuntime: 0,
       coldAgentRoute: { status: 'not_run', tokenUsage: null, reason: 'model or paid harness execution is outside this implementation check' },
       formalSlo: null,
-      standardSchemas: 'current Capability Provider Manifest v0.1/v0.2, Procedure v0.3/v0.4, and Agent Tool Evals direct-driver v0.1 workspace schemas match bundled bytes',
+      standardSchemas: 'current Capability Profile v0.3 and Provider Manifest v0.3, Procedure Profile v0.5 and implementation manifest v0.5, and Agent Tool Evals direct-driver v0.1 workspace schemas match bundled bytes',
     },
     bindings: inspectedWarm.providers,
     semantic: {
@@ -736,6 +841,7 @@ try {
       resultBytes: semantic.resultBytes,
       latencyMs: semantic.elapsedMs,
     },
+    conditionalProcedure,
     cliSmoke,
     hostServiceSmoke,
     evalsSmoke,

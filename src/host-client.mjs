@@ -19,6 +19,7 @@ export async function requestDirectHost({
   socketPath,
   action,
   workOrder,
+  selection,
   signal,
   timeoutMs = 305_000,
   maxResponseBytes = MAX_HOST_CLIENT_RESPONSE_BYTES,
@@ -32,7 +33,7 @@ export async function requestDirectHost({
     schemaVersion: HOST_REQUEST_VERSION,
     id,
     action,
-    ...(action === 'inspect' ? {} : { workOrder }),
+    ...(action === 'inspect' ? {} : action === 'project' ? { selection } : { workOrder }),
   }
   assertHostRequest(request, MAX_HOST_CLIENT_REQUEST_BYTES)
   const requestLine = Buffer.from(`${JSON.stringify(request)}\n`)

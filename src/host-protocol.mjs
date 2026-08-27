@@ -6,7 +6,7 @@ export const HOST_RESPONSE_VERSION = 'openadam.direct-host-response.v0.1'
 export const HOST_SERVICE_VERSION = 'openadam.direct-host-service-observation.v0.1'
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/u
-const ACTIONS = new Set(['inspect', 'validate', 'run'])
+const ACTIONS = new Set(['inspect', 'project', 'validate', 'run'])
 
 function ordinaryObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value) &&
@@ -29,11 +29,16 @@ export function assertHostRequest(request, maxBytes) {
   if (!ACTIONS.has(request.action)) throw new HostError('HOST_PROTOCOL_ERROR', 'Host request action is invalid')
   const allowed = request.action === 'inspect'
     ? new Set(['schemaVersion', 'id', 'action'])
-    : new Set(['schemaVersion', 'id', 'action', 'workOrder'])
+    : request.action === 'project'
+      ? new Set(['schemaVersion', 'id', 'action', 'selection'])
+      : new Set(['schemaVersion', 'id', 'action', 'workOrder'])
   if (!exactKeys(request, allowed) || Object.keys(request).length !== allowed.size) {
     throw new HostError('HOST_PROTOCOL_ERROR', 'Host request fields do not match its action')
   }
-  if (request.action !== 'inspect' && !ordinaryObject(request.workOrder)) {
+  if (request.action === 'project' && !ordinaryObject(request.selection)) {
+    throw new HostError('HOST_PROTOCOL_ERROR', 'Host request selection must be an object')
+  }
+  if (!['inspect', 'project'].includes(request.action) && !ordinaryObject(request.workOrder)) {
     throw new HostError('HOST_PROTOCOL_ERROR', 'Host request workOrder must be an object')
   }
   return request

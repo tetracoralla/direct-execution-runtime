@@ -197,6 +197,7 @@ export class JsonlSession {
       return {
         validateOutput: this.binding.validateOutput,
         label: call.target.procedureId,
+        contractDigest: this.binding.contractDigest,
       }
     }
     const operation = this.binding.operations.get(call.target.operationId)
@@ -212,6 +213,45 @@ export class JsonlSession {
     }
     assertSchema(operation.validateInput, call.input, 'HOST_INPUT_INVALID', `${call.target.operationId} input`)
     return { ...operation, label: call.target.operationId }
+  }
+
+  projectContract(target) {
+    if (this.binding.transport === 'procedure-jsonl-v0.2') {
+      if (
+        target.kind !== 'procedure' ||
+        target.procedureId !== this.binding.procedureId ||
+        target.procedureVersion !== this.binding.procedureVersion
+      ) {
+        throw new HostError('HOST_BINDING_MISMATCH', 'Projection Procedure identity does not match the selected provider binding')
+      }
+      return {
+        inputSchema: structuredClone(this.binding.inputSchema),
+        outputSchema: structuredClone(this.binding.outputSchema),
+        errors: [...this.binding.procedureErrors.values()].map(({ code, retryable }) => ({ code, retryable })),
+        contractDigest: this.binding.contractDigest,
+        contractSource: 'configured-files',
+        schemaBytes: this.binding.contractSchemaBytes,
+      }
+    }
+    if (
+      target.kind !== 'capability' ||
+      target.capabilityId !== this.binding.capabilityId ||
+      target.capabilityVersion !== this.binding.capabilityVersion
+    ) {
+      throw new HostError('HOST_BINDING_MISMATCH', 'Projection Capability identity does not match the selected provider binding')
+    }
+    const operation = this.binding.operations.get(target.operationId)
+    if (operation === undefined) {
+      throw new HostError('HOST_UNKNOWN_OPERATION', `Unknown Capability operation ${target.operationId}`)
+    }
+    return {
+      inputSchema: structuredClone(operation.inputSchema),
+      outputSchema: structuredClone(operation.outputSchema),
+      errors: [...operation.errors.values()].map(({ code, retryable }) => ({ code, retryable })),
+      contractDigest: operation.contractDigest,
+      contractSource: 'configured-files',
+      schemaBytes: operation.schemaBytes,
+    }
   }
 
   async invoke(call, { signal, deadlineAt, providerRequestId }) {
@@ -298,7 +338,7 @@ export class JsonlSession {
         result: response.result,
         sessionState,
         providerRoundTripMs: performance.now() - roundTripStarted,
-        contractDigest: this.binding.contractDigest,
+        contractDigest: contract.contractDigest,
       }
     }
     if (response.ok === false && response.error !== null && typeof response.error === 'object') {
@@ -331,13 +371,44 @@ export class JsonlSession {
           throw error
         }
         providerError = { ...response.error, retryable: declaration.retryable }
+      } else {
+        const errorFields = Object.keys(response.error).sort()
+        const exactLegacyFields =
+          JSON.stringify(errorFields) === JSON.stringify(['code', 'message'])
+        const exactEchoFields =
+          JSON.stringify(errorFields) === JSON.stringify(['code', 'message', 'retryable'])
+        if (!exactLegacyFields && !exactEchoFields) {
+          const error = new HostError('HOST_PROVIDER_PROTOCOL_ERROR', 'Capability returned an inexact error envelope')
+          this.#replace(error)
+          throw error
+        }
+        const declaration = contract.errors.get(response.error.code)
+        if (declaration === undefined) {
+          const error = new HostError('HOST_PROVIDER_PROTOCOL_ERROR', 'Capability returned an undeclared error code')
+          this.#replace(error)
+          throw error
+        }
+        if (
+          Object.hasOwn(response.error, 'retryable') &&
+          (typeof response.error.retryable !== 'boolean' ||
+            response.error.retryable !== declaration.retryable)
+        ) {
+          const error = new HostError('HOST_PROVIDER_PROTOCOL_ERROR', 'Capability error retryability differs from the Profile')
+          this.#replace(error)
+          throw error
+        }
+        providerError = {
+          code: response.error.code,
+          message: response.error.message,
+          retryable: declaration.retryable,
+        }
       }
       return {
         ok: false,
         error: providerError,
         sessionState,
         providerRoundTripMs: performance.now() - roundTripStarted,
-        contractDigest: this.binding.contractDigest,
+        contractDigest: contract.contractDigest,
       }
     }
     const error = new HostError('HOST_PROVIDER_PROTOCOL_ERROR', 'Capability adapter returned neither success nor provider error')

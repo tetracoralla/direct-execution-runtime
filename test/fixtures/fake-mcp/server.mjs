@@ -6,6 +6,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 
 const startupArgument = process.argv.find((value) => value.startsWith('--startup-delay='))
 const startupDelayMs = Number(startupArgument?.split('=')[1] ?? 0)
+const malformedLookup = process.argv.includes('--malformed-lookup')
 
 const inputSchema = {
   type: 'object',
@@ -25,28 +26,204 @@ const outputSchema = {
   properties: { value: { type: 'string', maxLength: 4096 } },
 }
 
+const dispatchInputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['operation', 'arguments'],
+  properties: {
+    operation: { type: 'string' },
+    arguments: { type: 'object' },
+  },
+  oneOf: [
+    {
+      properties: {
+        operation: { const: 'text.echo' },
+        arguments: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['value'],
+          properties: { value: { type: 'string', maxLength: 4096 } },
+        },
+      },
+    },
+    {
+      properties: {
+        operation: { const: 'text.upper' },
+        arguments: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['value'],
+          properties: { value: { type: 'string', maxLength: 4096 } },
+        },
+      },
+    },
+  ],
+}
+
+const compactDispatchInputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['operation', 'arguments'],
+  properties: {
+    operation: { type: 'string', enum: ['text.echo', 'text.upper'] },
+    arguments: { type: 'object' },
+  },
+}
+
+const describeInputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['operation'],
+  properties: { operation: { type: 'string', enum: ['text.echo', 'text.upper'] } },
+}
+
+const describeOutputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['operation'],
+  properties: {
+    operation: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'inputSchema'],
+      properties: {
+        id: { type: 'string' },
+        inputSchema: { type: 'object', additionalProperties: true },
+      },
+    },
+  },
+}
+
+const dispatchBatchInputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['items'],
+  properties: {
+    items: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 32,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['operation', 'arguments'],
+        properties: {
+          operation: { type: 'string' },
+          arguments: { type: 'object' },
+        },
+      },
+    },
+  },
+}
+
+const batchOutputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['results'],
+  properties: {
+    results: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 32,
+      items: outputSchema,
+    },
+  },
+}
+
+const annotations = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+}
+
 const server = new Server(
   { name: 'direct-execution-fake-mcp', version: '0.1.0' },
   { capabilities: { tools: {} } },
 )
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [{
-    name: 'echo',
-    description: 'Bounded read-only test echo',
-    inputSchema,
-    outputSchema,
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
+  tools: [
+    {
+      name: 'echo',
+      description: 'Bounded read-only test echo',
+      inputSchema,
+      outputSchema,
+      annotations,
     },
-  }],
+    {
+      name: 'dispatch',
+      description: 'Dispatch one selected typed text operation',
+      inputSchema: dispatchInputSchema,
+      outputSchema,
+      annotations,
+    },
+    {
+      name: 'dispatch.compact',
+      description: 'Dispatch through a compact closed operation envelope',
+      inputSchema: compactDispatchInputSchema,
+      outputSchema,
+      annotations,
+    },
+    {
+      name: 'dispatch.describe',
+      description: 'Return one selected dispatch operation schema',
+      inputSchema: describeInputSchema,
+      outputSchema: describeOutputSchema,
+      annotations,
+    },
+    {
+      name: 'dispatch.batch',
+      description: 'Run selected typed text operations in one batch',
+      inputSchema: dispatchBatchInputSchema,
+      outputSchema: batchOutputSchema,
+      annotations,
+    },
+  ],
 }))
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const input = request.params.arguments
+  if (request.params.name === 'dispatch') {
+    const value = input.operation === 'text.upper'
+      ? input.arguments.value.toUpperCase()
+      : input.arguments.value
+    return { content: [{ type: 'text', text: value }], structuredContent: { value } }
+  }
+  if (request.params.name === 'dispatch.compact') {
+    const value = input.operation === 'text.upper'
+      ? input.arguments.value.toUpperCase()
+      : input.arguments.value
+    return { content: [{ type: 'text', text: value }], structuredContent: { value } }
+  }
+  if (request.params.name === 'dispatch.describe') {
+    if (malformedLookup) {
+      return {
+        content: [{ type: 'text', text: 'malformed' }],
+        structuredContent: { operation: { id: input.operation, inputSchema: null } },
+      }
+    }
+    return {
+      content: [{ type: 'text', text: input.operation }],
+      structuredContent: {
+        operation: {
+          id: input.operation,
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['value'],
+            properties: { value: { type: 'string', maxLength: 4096 } },
+          },
+        },
+      },
+    }
+  }
+  if (request.params.name === 'dispatch.batch') {
+    const results = input.items.map((item) => ({
+      value: item.operation === 'text.upper' ? item.arguments.value.toUpperCase() : item.arguments.value,
+    }))
+    return { content: [{ type: 'text', text: 'batch' }], structuredContent: { results } }
+  }
   if (input.delayMs > 0) await delay(input.delayMs)
   if (input.behavior === 'stderr') process.stderr.write('x'.repeat(8192))
   const structuredContent = { value: input.value }

@@ -33,14 +33,21 @@ continue to own domain meaning.
 
 The current v0.1 slice supports:
 
-- Provider Manifest v0.1/v0.2-bound `openadam.capability-jsonl.v0.1` sessions;
+- Capability Profile v0.3 plus Provider Manifest v0.3-bound
+  `openadam.capability-jsonl.v0.1` sessions;
 - Profile-and-implementation-bound `openadam.procedure-jsonl.v0.2` sessions;
 - live-schema-bound stdio MCP sessions;
+- operation-level live MCP contract projection after an operation is selected,
+  from either a listed discriminated union or an explicitly bound read-only
+  schema lookup tool,
+  including declared native-batch item validation;
 - persistent and per-call provider lifecycles;
 - bounded fair admission, deadlines, cancellation, circuit breaking, session
   replacement, ordered correlation, and partial failure;
 - complete request, provider-response, stderr, protocol-line, and result limits;
-- a JavaScript library, one-shot CLI, and current-user-only Unix Socket service.
+- a JavaScript library, one-shot CLI, and current-user-only Unix Socket service;
+- optional owner-local metadata-only execution observations for Agent Tool
+  Observer.
 
 It deliberately has no natural-language parser, provider marketplace,
 credential store, model-facing generic `invoke` tool, arbitrary workflow
@@ -108,12 +115,21 @@ One-shot mode starts and closes its own runtime:
 
 ```sh
 openadam-direct-exec inspect --config /absolute/path/providers.local.json
+openadam-direct-exec project --config /absolute/path/providers.local.json --selection selection.json
 openadam-direct-exec validate --config /absolute/path/providers.local.json --work-order request.json
 openadam-direct-exec run --config /absolute/path/providers.local.json --work-order request.json
 ```
 
 Use `--work-order -` to read one work order from stdin. Output is one compact
 JSON object on stdout. Work orders and results are not written to the repository.
+To emit privacy-bounded operational metadata, add an absolute owner-local path:
+
+```sh
+openadam-direct-exec run \
+  --config /absolute/path/providers.local.json \
+  --work-order request.json \
+  --observation-log "$HOME/Library/Application Support/OpenAdam/Direct Execution Runtime/observations.jsonl"
+```
 
 ## Persistent local service
 
@@ -125,7 +141,8 @@ runtime_dir="$(mktemp -d)"
 chmod 700 "$runtime_dir"
 openadam-direct-exec serve \
   --config /absolute/path/providers.local.json \
-  --socket "$runtime_dir/direct-exec.sock"
+  --socket "$runtime_dir/direct-exec.sock" \
+  --observation-log "$HOME/Library/Application Support/OpenAdam/Direct Execution Runtime/observations.jsonl"
 ```
 
 The first stdout line is a structured readiness observation. Separate client
@@ -133,6 +150,7 @@ processes can then reuse the provider sessions:
 
 ```sh
 openadam-direct-exec inspect --socket "$runtime_dir/direct-exec.sock"
+openadam-direct-exec project --socket "$runtime_dir/direct-exec.sock" --selection selection.json
 openadam-direct-exec run --socket "$runtime_dir/direct-exec.sock" --work-order request.json
 ```
 
@@ -141,6 +159,15 @@ provider processes, and removes only the Socket it created. The service refuses
 an insecure parent directory, an active second listener, or a stale Socket
 unless replacement is explicitly requested. It has no network listener and no
 automatic login/startup installation.
+
+The optional observation log is a bounded owner-only JSONL file. Each
+`openadam.direct-execution-observation.v0.1` event contains hashed work-order and
+call identity, semantic target/provider identity, state, timing, payload byte
+counts, cold/warm session state, and binding digests. It never contains work
+order IDs, call IDs, inputs, results, or error messages. Observation failure is
+reported in the direct result but cannot change provider execution semantics.
+The log has a 256 MiB ceiling and stops accepting new observations at that
+boundary; an operator must archive or replace it deliberately.
 
 ## Controller evaluation adapter
 
@@ -165,6 +192,9 @@ maintainer-only integration check: it uses the current sibling development
 checkouts without modifying them and writes a current-run observation to
 ignored `.verify/`. It is not required to build or use the public repository,
 and its observation is not an SLA or a universal cost-savings claim.
+Maintainers may explicitly set `OPENADAM_DIRECT_OBSERVATION_LOG` while running
+the local pilot to emit the same privacy-bounded execution events for local
+Agent Tool Observer ingestion; the variable is otherwise inactive.
 
 The review boundary and source-release steps are documented in
 `docs/REVIEW_CONTRACT.md` and `docs/RELEASE.md`.

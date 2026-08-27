@@ -3,24 +3,51 @@
 Provider configuration is explicit current-host state and should normally stay
 outside source control.
 
-For a Capability JSONL provider, configure its root, current v0.1 or v0.2
-Provider Manifest, provider-owned execution identity files, and the input/output
-schema files for each admitted operation. The runtime verifies schema digests
-and, for v0.2, adapter-operation bindings before starting the adapter. It uses
-the manifest's adapter command, arguments, and working-directory declaration.
+Provider configuration uses `openadam.direct-provider-config.v0.2`.
+
+For a Capability JSONL provider, configure its root, external current
+Capability Profile v0.3, Provider Manifest v0.3, provider-owned execution
+identity files, and input/output schema files for each admitted operation. The
+runtime resolves Profile schemas, verifies the complete `profileDigest`, checks
+configured and manifest schema digests, derives annotations from Profile
+semantics, requires both manifest binding lists to exactly cover the Profile
+operation set, and enforces its read-only idempotent closed-world boundary before
+starting the adapter. It uses the manifest's adapter command, arguments, and
+working-directory declaration. Legacy manifests are rejected because they do
+not bind the complete Profile semantics.
 
 For a Procedure JSONL provider, configure the external current Procedure
 Profile plus the provider-contained implementation manifest and canonical
 input/output schemas, together with provider-owned execution identity files.
-The runtime verifies Procedure identity, read-only idempotent semantics, exact
-stage-to-Capability alignment, contract digests, and execution identity before
-startup.
+The runtime requires Procedure Profile v0.5 and implementation manifest v0.5,
+then verifies Procedure identity, complete Profile digest, read-only idempotent
+semantics, conditional causal order and completion, rejects required
+dependencies on conditional stages, verifies exact stage-to-Capability
+alignment, contract digests, and execution identity before startup.
+It requires aggregate `openWorld: false`; a v0.3/v0.4 Profile remains a
+standards compatibility input but is insufficient for this closed-world host.
 
 For stdio MCP, configure the provider root, exact executable, working directory,
 arguments, declared provider-owned identity files, expected live MCP server
-name/version, and a closed allowlist of tools. The runtime binds those static
-execution inputs and acquires the selected input/output schemas and safety
-annotations from every live session.
+name/version, and a closed operator allowlist of tools. The runtime binds those
+static execution inputs and reacquires the selected input/output schemas and
+safety annotations from every live session. For raw MCP, annotations are a
+runtime veto in addition to the operator allowlist, not an independently
+verified Capability semantic claim.
+
+An optional `operationProjections` entry declares a closed operation envelope
+inside one allowed MCP tool. `toolName`, `operationField`, and `argumentsField`
+must match the live envelope. The listed tool must expose either a discriminated
+union or a closed operation enum together with `schemaLookup`. A schema lookup
+explicitly binds a distinct allowed read-only tool, the field used to request
+one operation, and the response path containing that operation's exact input
+schema. The runtime invokes it only after the operation is selected, validates
+its live response, and caches the resulting contract for that MCP session.
+Calls use the explicit `mcp-operation` target and repeat the same operation id
+in provider input. Optional `batchToolName` and `batchItemsField` bind a
+distinct allowed native batch tool whose items use the same acquired operation
+contracts. The runtime does not infer this mapping, auto-batch unrelated work,
+or hide provider input and error semantics behind an opaque invocation API.
 
 The MCP server identity is a transport observation; it is not automatically the
 provider package or product release version. The runtime does not accept
@@ -56,3 +83,23 @@ listener and will replace a stale Socket only when
 1024; the default is 64. Work admission remains separately bounded by the
 limits in provider configuration. The service does not persist work orders,
 results, credentials, or provider availability state.
+
+## Optional execution observation
+
+Pass `--observation-log /absolute/private/path/observations.jsonl` to a one-shot
+config-backed `run` or to `serve`. Socket clients cannot override the serving
+runtime's observation path. The runtime creates a missing parent with owner-only
+permissions, rejects symlinks and insecure ownership/modes, and caps the file at
+256 MiB. It appends one closed metadata event per completed/failed call and does
+not persist work-order IDs, call IDs, inputs, results, or error messages.
+
+For the local Agent Tool Observer default, use:
+
+```text
+~/Library/Application Support/OpenAdam/Direct Execution Runtime/observations.jsonl
+```
+
+Observation failure appears in `execution.observation` for a config-backed run;
+it cannot change the provider call status or payload. Rotation/archival is an
+explicit operator action because silently replacing the file could lose events
+before a collector advances its cursor.

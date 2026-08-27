@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:openadam:direct-execution-observation:v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "eventId", "workOrderHash", "callHash", "occurredAtMs",
+    "completedAtMs", "target", "provider", "status", "errorCode", "timingMs",
+    "payloadBytes", "sessionState", "bindingDigest", "contractDigest", "execution"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "openadam.direct-execution-observation.v0.1" },
+    "eventId": { "$ref": "#/$defs/digest" },
+    "workOrderHash": { "$ref": "#/$defs/digest" },
+    "callHash": { "$ref": "#/$defs/digest" },
+    "occurredAtMs": { "type": "integer", "minimum": 0 },
+    "completedAtMs": { "type": "integer", "minimum": 0 },
+    "target": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "capabilityId", "capabilityVersion", "operationId"],
+          "properties": {
+            "kind": { "const": "capability" },
+            "capabilityId": { "$ref": "#/$defs/id" },
+            "capabilityVersion": { "$ref": "#/$defs/version" },
+            "operationId": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "procedureId", "procedureVersion"],
+          "properties": {
+            "kind": { "const": "procedure" },
+            "procedureId": { "$ref": "#/$defs/id" },
+            "procedureVersion": { "$ref": "#/$defs/version" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "toolName"],
+          "properties": {
+            "kind": { "const": "mcp-tool" },
+            "toolName": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "toolName", "operationId"],
+          "properties": {
+            "kind": { "const": "mcp-operation" },
+            "toolName": { "$ref": "#/$defs/id" },
+            "operationId": { "$ref": "#/$defs/id" }
+          }
+        }
+      ]
+    },
+    "provider": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "version", "transport", "lifecycle"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "oneOf": [{ "$ref": "#/$defs/version" }, { "type": "null" }] },
+        "transport": { "enum": ["capability-jsonl-v0.1", "procedure-jsonl-v0.2", "mcp-stdio"] },
+        "lifecycle": { "enum": ["persistent", "per-call"] }
+      }
+    },
+    "status": { "enum": ["ok", "provider_error", "host_error"] },
+    "errorCode": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+    "timingMs": {
+      "type": "object", "additionalProperties": false,
+      "required": ["total", "queue", "providerRoundTrip"],
+      "properties": {
+        "total": { "$ref": "#/$defs/nonNegativeNumber" },
+        "queue": { "oneOf": [{ "$ref": "#/$defs/nonNegativeNumber" }, { "type": "null" }] },
+        "providerRoundTrip": { "oneOf": [{ "$ref": "#/$defs/nonNegativeNumber" }, { "type": "null" }] }
+      }
+    },
+    "payloadBytes": {
+      "type": "object", "additionalProperties": false,
+      "required": ["request", "response"],
+      "properties": {
+        "request": { "type": "integer", "minimum": 0 },
+        "response": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "sessionState": { "enum": ["cold", "warm", null] },
+    "bindingDigest": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
+    "contractDigest": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
+    "execution": {
+      "type": "object", "additionalProperties": false,
+      "required": ["modelCalls", "tokenUsage", "monetaryCost", "externalCostStatus"],
+      "properties": {
+        "modelCalls": { "const": 0 },
+        "tokenUsage": { "type": "null" },
+        "monetaryCost": { "type": "null" },
+        "externalCostStatus": { "const": "not_observed" }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$" },
+    "version": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "nonNegativeNumber": { "type": "number", "minimum": 0 }
+  }
+}

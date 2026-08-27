@@ -14,6 +14,7 @@ async function schema(name) {
 test('published host carrier schemas agree with runtime request and response checks', async () => {
   const ajv = new Ajv2020({ allErrors: true, strict: false })
   ajv.addSchema(await schema('work-order.schema.json'))
+  ajv.addSchema(await schema('contract-selection.schema.json'))
   const validateRequest = ajv.compile(await schema('host-request.schema.json'))
   const validateResponse = ajv.compile(await schema('host-response.schema.json'))
   const request = {
@@ -24,6 +25,23 @@ test('published host carrier schemas agree with runtime request and response che
   }
   assert.equal(validateRequest(request), true, JSON.stringify(validateRequest.errors))
   assert.equal(assertHostRequest(request, 1024 * 1024), request)
+  const project = {
+    schemaVersion: HOST_REQUEST_VERSION,
+    id: 'project-case',
+    action: 'project',
+    selection: {
+      schemaVersion: 'openadam.direct-contract-selection.v0.1',
+      providerId: 'test.fake-capability',
+      target: {
+        kind: 'capability',
+        capabilityId: 'org.openadam.test.echo',
+        capabilityVersion: '0.1.0',
+        operationId: 'echo',
+      },
+    },
+  }
+  assert.equal(validateRequest(project), true, JSON.stringify(validateRequest.errors))
+  assert.equal(assertHostRequest(project, 1024 * 1024), project)
   const success = hostSuccess(request.id, { status: 'ok' })
   assert.equal(validateResponse(success), true, JSON.stringify(validateResponse.errors))
   assert.equal(assertHostResponse(success, request.id, 1024 * 1024), success)

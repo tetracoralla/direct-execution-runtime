@@ -7,6 +7,9 @@ export function canonicalJson(value) {
   if (typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value)
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) throw new HostError('HOST_INVALID_JSON_VALUE', 'JSON numbers must be finite')
+    if (Number.isInteger(value) && !Number.isSafeInteger(value) && Math.abs(value) < 1e21) {
+      throw new HostError('HOST_INVALID_JSON_VALUE', 'Unsafe JSON integers must be encoded as strings')
+    }
     return JSON.stringify(value)
   }
   if (Array.isArray(value)) {
@@ -129,6 +132,17 @@ export function parseStrictJson(text, label = 'JSON input') {
     if (character === '"') return stringValue()
     const literal = /^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/u.exec(text.slice(index))
     if (literal === null) fail('expected JSON value')
+    if (/^-?(?:0|[1-9]\d*)$/u.test(literal[0])) {
+      const integer = BigInt(literal[0])
+      if (integer > BigInt(Number.MAX_SAFE_INTEGER) || integer < BigInt(Number.MIN_SAFE_INTEGER)) {
+        fail('integer must be within the IEEE-754 safe range or encoded as a string')
+      }
+    } else if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/u.test(literal[0])) {
+      const number = Number(literal[0])
+      if (Number.isInteger(number) && !Number.isSafeInteger(number) && Math.abs(number) < 1e21) {
+        fail('integer-valued number loses IEEE-754 precision and must be encoded as a string')
+      }
+    }
     index += literal[0].length
     return undefined
   }
@@ -187,8 +201,53 @@ export function parseStrictJson(text, label = 'JSON input') {
   whitespace()
   if (index !== text.length) fail('unexpected trailing content')
   try {
-    return JSON.parse(text)
+    const parsed = JSON.parse(text)
+    assertJsonDataModel(parsed, label)
+    return parsed
   } catch (error) {
+    if (error instanceof HostError) throw error
     throw new HostError('HOST_INVALID_JSON', `${label}: ${error.message}`, { cause: error })
+  }
+}
+
+function assertJsonDataModel(value, label) {
+  if (value === null || typeof value === 'boolean') return
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new HostError('HOST_INVALID_JSON', `${label}: JSON number must be finite`)
+    return
+  }
+  if (typeof value === 'string') {
+    assertUnicodeScalarString(value, label)
+    return
+  }
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      if (!Object.hasOwn(value, index)) throw new HostError('HOST_INVALID_JSON', `${label}: sparse arrays are not permitted`)
+      assertJsonDataModel(value[index], label)
+    }
+    return
+  }
+  if (typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) {
+      assertUnicodeScalarString(key, label)
+      assertJsonDataModel(item, label)
+    }
+    return
+  }
+  throw new HostError('HOST_INVALID_JSON', `${label}: unsupported JSON value ${typeof value}`)
+}
+
+function assertUnicodeScalarString(value, label) {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1)
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        throw new HostError('HOST_INVALID_JSON', `${label}: lone Unicode surrogate is not permitted`)
+      }
+      index += 1
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      throw new HostError('HOST_INVALID_JSON', `${label}: lone Unicode surrogate is not permitted`)
+    }
   }
 }

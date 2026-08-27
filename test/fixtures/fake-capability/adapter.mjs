@@ -16,10 +16,12 @@ for await (const line of lines) {
     continue
   }
   if (input.behavior === 'provider-error') {
+    const error = { code: 'FAKE_REJECTED', message: 'Fake provider rejected the input' }
+    if (input.value !== 'without-retryable') error.retryable = false
     process.stdout.write(`${JSON.stringify({
       id: request.id,
       ok: false,
-      error: { code: 'FAKE_REJECTED', message: 'Fake provider rejected the input', retryable: false },
+      error,
     })}\n`)
     continue
   }

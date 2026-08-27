@@ -10,6 +10,9 @@ generic invocation tool.
 
 - Keep the public surface as a library and explicit CLI. Do not add an MCP tool
   such as `invoke(provider, operation, opaqueInput)`.
+- Contract projection is read-only host introspection after a provider and
+  operation are selected. Keep it explicit and typed; never turn it into a
+  model-facing execution indirection.
 - Validate every call against the selected provider-owned live schema or the
   exact schema whose digest is bound by the current Provider Manifest.
 - Preserve provider result and error semantics. Host errors describe only

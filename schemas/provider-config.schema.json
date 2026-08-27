@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:openadam:direct-provider-config:v0.1",
+  "$id": "urn:openadam:direct-provider-config:v0.2",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "providers"],
   "properties": {
-    "schemaVersion": { "const": "openadam.direct-provider-config.v0.1" },
+    "schemaVersion": { "const": "openadam.direct-provider-config.v0.2" },
     "limits": {
       "type": "object",
       "additionalProperties": false,
@@ -73,7 +73,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "providerId", "transport", "lifecycle", "rootPath", "manifestPath", "identityFiles",
+        "providerId", "transport", "lifecycle", "rootPath", "profilePath", "manifestPath", "identityFiles",
         "capabilityId", "capabilityVersion", "contracts"
       ],
       "properties": {
@@ -81,6 +81,7 @@
         "transport": { "const": "capability-jsonl-v0.1" },
         "lifecycle": { "$ref": "#/$defs/lifecycle" },
         "rootPath": { "$ref": "#/$defs/absolutePath" },
+        "profilePath": { "$ref": "#/$defs/absolutePath" },
         "manifestPath": { "$ref": "#/$defs/absolutePath" },
         "identityFiles": { "$ref": "#/$defs/identityFiles" },
         "capabilityId": { "$ref": "#/$defs/identity" },
@@ -149,6 +150,43 @@
           "minItems": 1,
           "maxItems": 32,
           "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identity" }
+        },
+        "operationProjections": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/operationProjection" }
+        }
+      }
+    },
+    "operationProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["toolName", "operationField", "argumentsField"],
+      "properties": {
+        "toolName": { "$ref": "#/$defs/identity" },
+        "operationField": { "$ref": "#/$defs/identity" },
+        "argumentsField": { "$ref": "#/$defs/identity" },
+        "batchToolName": { "$ref": "#/$defs/identity" },
+        "batchItemsField": { "$ref": "#/$defs/identity" },
+        "schemaLookup": { "$ref": "#/$defs/schemaLookup" }
+      },
+      "dependentRequired": {
+        "batchToolName": ["batchItemsField"],
+        "batchItemsField": ["batchToolName"]
+      }
+    },
+    "schemaLookup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["toolName", "operationField", "resultPath"],
+      "properties": {
+        "toolName": { "$ref": "#/$defs/identity" },
+        "operationField": { "$ref": "#/$defs/identity" },
+        "resultPath": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
           "items": { "$ref": "#/$defs/identity" }
         }
       }

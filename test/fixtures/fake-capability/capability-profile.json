@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "openadam.capability-profile.v0.3",
+  "id": "org.openadam.test.echo",
+  "version": "0.1.0",
+  "title": "Echo one value",
+  "summary": "Return one explicit value through a deterministic test Capability.",
+  "lifecycle": "experimental",
+  "operations": [
+    {
+      "id": "echo",
+      "title": "Echo",
+      "description": "Return the supplied value without reading or changing external state.",
+      "semantics": {
+        "resultVariability": "deterministic",
+        "contextSources": [],
+        "stateAccess": "none",
+        "idempotency": "idempotent",
+        "openWorld": false,
+        "ambiguity": "not-applicable",
+        "provenance": "not-applicable"
+      },
+      "inputSchema": { "$ref": "./echo.input.schema.json" },
+      "outputSchema": { "$ref": "./echo.output.schema.json" },
+      "errors": [
+        {
+          "code": "FAKE_REJECTED",
+          "description": "The fake provider rejected the supplied value.",
+          "retryable": false
+        }
+      ]
+    }
+  ]
+}

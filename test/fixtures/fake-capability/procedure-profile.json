@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "openadam.procedure-profile.v0.3",
+  "schemaVersion": "openadam.procedure-profile.v0.5",
   "id": "org.openadam.test.echo-procedure",
   "version": "0.1.0",
   "title": "Echo one value",
@@ -9,7 +9,8 @@
     "resultVariability": "deterministic",
     "contextSources": [],
     "stateAccess": "none",
-    "idempotency": "idempotent"
+    "idempotency": "idempotent",
+    "openWorld": false
   },
   "inputSchema": { "$ref": "./echo.input.schema.json" },
   "outputSchema": { "$ref": "./echo.output.schema.json" },

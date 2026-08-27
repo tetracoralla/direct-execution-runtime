@@ -25,7 +25,7 @@ const allFiles = await files(root)
 for (const required of [
   'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'CONTRIBUTING.md',
   'README.md', 'docs/INTEGRATIONS.md', 'docs/PUBLIC_DEMO.md',
-  'examples/demo-math-anchor.mjs', 'schemas/README.md',
+  'examples/demo-math-anchor.mjs', 'examples/contract-selection.example.json', 'schemas/README.md',
   '.github/workflows/ci.yml', '.github/workflows/codeql.yml', '.github/dependabot.yml',
 ]) {
   if (!allFiles.includes(resolve(root, required))) throw new Error(`public repository file is absent: ${required}`)
@@ -105,10 +105,13 @@ for (const match of workflowText.matchAll(/\buses:\s+[^\s@]+@([^\s#]+)/gu)) {
 const ajv = new Ajv2020({ allErrors: true, strict: false })
 const providerSchema = parseStrictJson(await readFile(resolve(root, 'schemas/provider-config.schema.json'), 'utf8'))
 const workOrderSchema = parseStrictJson(await readFile(resolve(root, 'schemas/work-order.schema.json'), 'utf8'))
+const contractSelectionSchema = parseStrictJson(await readFile(resolve(root, 'schemas/contract-selection.schema.json'), 'utf8'))
 const exampleConfig = parseStrictJson(await readFile(resolve(root, 'examples/provider-config.example.json'), 'utf8'))
 const exampleOrder = parseStrictJson(await readFile(resolve(root, 'examples/work-order.example.json'), 'utf8'))
+const exampleSelection = parseStrictJson(await readFile(resolve(root, 'examples/contract-selection.example.json'), 'utf8'))
 if (!ajv.compile(providerSchema)(exampleConfig)) throw new Error('provider config example does not satisfy its schema')
 if (!ajv.compile(workOrderSchema)(exampleOrder)) throw new Error('work-order example does not satisfy its schema')
+if (!ajv.compile(contractSelectionSchema)(exampleSelection)) throw new Error('contract-selection example does not satisfy its schema')
 
 const cli = resolve(root, 'src/cli.mjs')
 if (((await stat(cli)).mode & 0o111) === 0) throw new Error('CLI entry point is not executable')

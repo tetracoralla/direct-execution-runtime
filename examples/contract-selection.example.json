@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "openadam.direct-contract-selection.v0.1",
+  "providerId": "example.capability-provider",
+  "target": {
+    "kind": "capability",
+    "capabilityId": "org.example.capability",
+    "capabilityVersion": "1.0.0",
+    "operationId": "run"
+  }
+}

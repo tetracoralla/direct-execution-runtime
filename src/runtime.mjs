@@ -7,6 +7,7 @@ import { JsonlSession } from './sessions/jsonl-session.mjs'
 import { McpSession } from './sessions/mcp-session.mjs'
 
 let validateWorkOrderSchema
+let validateContractSelectionSchema
 let providerRequestCounter = 0
 let workOrderRunCounter = 0
 
@@ -15,6 +16,15 @@ async function workOrderValidator() {
     validateWorkOrderSchema = createValidator().compile(await loadBundledSchema('work-order.schema.json'))
   }
   return validateWorkOrderSchema
+}
+
+async function contractSelectionValidator() {
+  if (validateContractSelectionSchema === undefined) {
+    validateContractSelectionSchema = createValidator().compile(
+      await loadBundledSchema('contract-selection.schema.json'),
+    )
+  }
+  return validateContractSelectionSchema
 }
 
 function createSession(binding) {
@@ -105,11 +115,19 @@ class ProviderManager {
 }
 
 export class DirectExecutionRuntime {
-  constructor(config) {
+  constructor(config, options = {}) {
     this.config = config
     this.admission = new AdmissionController(config.limits)
     this.circuits = new CircuitBreaker(config.limits)
     this.providers = new ProviderManager(config)
+    this.observationSink = options.observationSink ?? null
+    this.observationState = {
+      enabled: this.observationSink !== null,
+      attempted: 0,
+      written: 0,
+      failed: 0,
+      lastErrorCode: null,
+    }
   }
 
   async assertWorkOrder(workOrder) {
@@ -131,11 +149,50 @@ export class DirectExecutionRuntime {
       if (binding.transport === 'procedure-jsonl-v0.2' && call.target.kind !== 'procedure') {
         throw new HostError('HOST_BINDING_MISMATCH', `Provider ${call.providerId} requires a Procedure target`)
       }
-      if (binding.transport === 'mcp-stdio' && call.target.kind !== 'mcp-tool') {
-        throw new HostError('HOST_BINDING_MISMATCH', `Provider ${call.providerId} requires an MCP tool target`)
+      if (
+        binding.transport === 'mcp-stdio' &&
+        !['mcp-tool', 'mcp-operation'].includes(call.target.kind)
+      ) {
+        throw new HostError('HOST_BINDING_MISMATCH', `Provider ${call.providerId} requires an MCP target`)
       }
     }
     return workOrder
+  }
+
+  async projectContract(selection) {
+    assertSchema(
+      await contractSelectionValidator(),
+      selection,
+      'HOST_CONTRACT_SELECTION_INVALID',
+      'contract selection',
+    )
+    const binding = this.providers.binding(selection.providerId)
+    if (
+      (binding.transport === 'capability-jsonl-v0.1' && selection.target.kind !== 'capability') ||
+      (binding.transport === 'procedure-jsonl-v0.2' && selection.target.kind !== 'procedure') ||
+      (binding.transport === 'mcp-stdio' && !['mcp-tool', 'mcp-operation'].includes(selection.target.kind))
+    ) {
+      throw new HostError('HOST_BINDING_MISMATCH', 'Contract selection target does not match the provider transport')
+    }
+    const deadlineAt = Date.now() + this.config.limits.defaultTimeoutMs
+    const contract = await this.providers.withSession(selection.providerId, async (session) => (
+      await session.projectContract(selection.target, { deadlineAt })
+    ))
+    const projection = {
+      schemaVersion: 'openadam.direct-contract-projection.v0.1',
+      projectedAt: new Date().toISOString(),
+      provider: {
+        id: binding.providerId,
+        version: binding.providerVersion ?? binding.expectedServer.version,
+        transport: binding.transport,
+      },
+      target: selection.target,
+      contract,
+    }
+    if (jsonBytes(projection) > this.config.limits.maxResultBytes) {
+      throw new HostError('HOST_RESULT_TOO_LARGE', 'Selected operation contract exceeds the configured result limit')
+    }
+    return projection
   }
 
   async validateWorkOrder(workOrder) {
@@ -169,8 +226,10 @@ export class DirectExecutionRuntime {
   async runWorkOrder(workOrder, options = {}) {
     await this.assertWorkOrder(workOrder)
     const started = performance.now()
+    const startedAtMs = Date.now()
     workOrderRunCounter += 1
-    const fairnessKey = `${workOrderRunCounter}-${digestJson({ workOrderId: workOrder.id }).slice(7, 23)}`
+    const runSequence = workOrderRunCounter
+    const fairnessKey = `${runSequence}-${digestJson({ workOrderId: workOrder.id }).slice(7, 23)}`
     const calls = await Promise.all(
       workOrder.calls.map((call) => this.#runCall(workOrder.id, call, options.signal, fairnessKey)),
     )
@@ -191,7 +250,74 @@ export class DirectExecutionRuntime {
       calls,
       timingMs: { total: performance.now() - started },
     }
+    await this.#observeCalls(workOrder, calls, startedAtMs, runSequence)
+    if (this.observationSink !== null) result.execution.observation = this.observationSnapshot()
     return this.#boundResult(result)
+  }
+
+  async #observeCalls(workOrder, calls, startedAtMs, runSequence) {
+    if (this.observationSink === null) return
+    const workOrderHash = digestJson({ workOrderId: workOrder.id })
+    for (let index = 0; index < calls.length; index += 1) {
+      const sourceCall = workOrder.calls[index]
+      const resultCall = calls[index]
+      const binding = this.config.providers.get(sourceCall.providerId)
+      const durationMs = Math.max(0, resultCall.timingMs?.total ?? 0)
+      const completedAtMs = Math.max(startedAtMs, Math.round(startedAtMs + durationMs))
+      const responsePayload = resultCall.status === 'ok' ? resultCall.result : resultCall.error
+      const providerVersion = resultCall.binding?.providerVersion
+        ?? binding?.providerVersion
+        ?? binding?.expectedServer?.version
+        ?? null
+      const observation = {
+        schemaVersion: 'openadam.direct-execution-observation.v0.1',
+        eventId: digestJson({ workOrderHash, callId: sourceCall.id, completedAtMs, runSequence, status: resultCall.status }),
+        workOrderHash,
+        callHash: digestJson({ workOrderHash, callId: sourceCall.id }),
+        occurredAtMs: startedAtMs,
+        completedAtMs,
+        target: sourceCall.target,
+        provider: {
+          id: sourceCall.providerId,
+          version: providerVersion,
+          transport: binding?.transport,
+          lifecycle: binding?.lifecycle,
+        },
+        status: resultCall.status,
+        errorCode: resultCall.error?.code ?? null,
+        timingMs: {
+          total: durationMs,
+          queue: resultCall.timingMs?.queue ?? null,
+          providerRoundTrip: resultCall.timingMs?.providerRoundTrip ?? null,
+        },
+        payloadBytes: {
+          request: jsonBytes(sourceCall.input),
+          response: responsePayload === undefined ? null : jsonBytes(responsePayload),
+        },
+        sessionState: resultCall.session ?? null,
+        bindingDigest: resultCall.binding?.digest ?? binding?.bindingDigest ?? null,
+        contractDigest: resultCall.binding?.contractDigest ?? null,
+        execution: {
+          modelCalls: 0,
+          tokenUsage: null,
+          monetaryCost: null,
+          externalCostStatus: 'not_observed',
+        },
+      }
+      this.observationState.attempted += 1
+      try {
+        await this.observationSink.write(observation)
+        this.observationState.written += 1
+        this.observationState.lastErrorCode = null
+      } catch (error) {
+        this.observationState.failed += 1
+        this.observationState.lastErrorCode = error?.code ?? 'HOST_OBSERVATION_WRITE_FAILED'
+      }
+    }
+  }
+
+  observationSnapshot() {
+    return { ...this.observationState }
   }
 
   async #runCall(workOrderId, call, signal, fairnessKey) {

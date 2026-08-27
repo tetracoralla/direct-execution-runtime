@@ -35,7 +35,12 @@ Each call selects either:
 - a specific Procedure id and version whose current Profile, implementation
   manifest, stage bindings, adapter entry, and contract digests agree; or
 - a specific MCP tool whose input and output schemas are reacquired from the
-  live session.
+  live session; or
+- a specific operation inside a declared closed MCP operation envelope. The
+  exact selected contract comes from either its listed discriminated branch or
+  an explicitly bound read-only schema lookup tool. The work order carries both
+  the public tool name and operation id, while provider input repeats the same
+  operation id and is validated against only that live contract.
 
 The outer work-order schema cannot describe every domain input. The runtime
 therefore treats `input` as provisionally carried data only until it validates
@@ -55,13 +60,24 @@ bounded runtime and its provider sessions. It is an operator-managed current
 host process, not an Agent shell modification and not an MCP server.
 
 The Socket protocol accepts exactly one strict JSON request and returns exactly
-one strict JSON response per connection. Only `inspect`, `validate`, and `run`
-are admitted. The Socket parent must be owned by and accessible only to the
+one strict JSON response per connection. Only `inspect`, `project`, `validate`,
+and `run` are admitted. `project` returns one already-selected typed contract;
+it cannot execute a provider call and is not exposed as an Agent tool. The
+Socket parent must be owned by and accessible only to the
 current user; the created Socket is mode `0600`. An incomplete request has a
 bounded receive deadline. A client
 disconnect cancels its owned run. Graceful shutdown cancels all owned work,
 closes provider sessions, and removes only the Socket inode created by the
 service.
+
+The library accepts an optional observation sink, and the CLI/service expose an
+explicit absolute `--observation-log` path. Observation is operational metadata,
+not a fourth execution carrier and not a semantic source. It records hashed
+work-order/call identity, the already-selected semantic target and provider,
+terminal state, stable error code, timing, serialized input/result byte counts,
+session state, and binding digests. It does not retain work orders, inputs,
+results, or error messages. Sink failure is visible but never changes provider
+execution or result semantics.
 
 ## Provider configuration
 
@@ -69,16 +85,48 @@ Provider configuration is current host state. It explicitly points at one
 installed or development provider root and never becomes a portable semantic
 claim.
 
-Capability JSONL bindings are accepted only when a current Provider Manifest
-v0.1 or v0.2, selected implementation, operation annotations, contract schema
-files, declared digests, and provider-owned execution identity files agree. A
-v0.2 manifest must also bind every configured operation to the JSONL adapter.
-Procedure JSONL bindings additionally require exact Profile and
-implementation-stage alignment plus explicit execution identity files. MCP
+Capability JSONL bindings are accepted only when a current Capability Profile
+v0.3, Provider Manifest v0.3, selected implementation, complete Profile digest,
+semantics-derived operation annotations, contract schema files, declared
+digests, complete public and adapter operation sets, and provider-owned
+execution identity files agree. A host configuration may select a safe subset
+for execution, but the Provider Manifest itself must still bind every operation
+in the selected Profile.
+Procedure JSONL bindings require Procedure Profile v0.5, implementation
+manifest v0.5, complete Profile digest, conditional causal/completion validity,
+exact stage alignment, no required dependency on an optional stage, and
+explicit execution identity files. MCP
 binding identity includes the executable, arguments, working directory, and
 declared provider-owned identity files, then reacquires selected tools and
-schemas after every session replacement. v0.1 admits only read-only,
-non-destructive, idempotent, closed-world execution.
+schemas after every session replacement. An operator may additionally declare
+one closed MCP operation envelope as operation-projectable and bind one native
+batch tool to the same item envelope. A compact envelope may additionally bind
+a distinct allowed read-only schema lookup tool and the exact response path for
+one operation input schema. The runtime then compiles only selected operation
+contracts, requires the target and input operation ids to agree, and validates
+each native batch item against its own contract before execution. v0.1
+admits only read-only,
+non-destructive, idempotent, closed-world execution. Procedure admission also
+requires aggregate `openWorld: false`; a legacy omission is not a safe default.
+
+Capability and Procedure Profile digests bind semantic fields and stable errors
+as well as schemas. Manifest annotations cannot weaken Capability semantics.
+Raw MCP tools remain provider-native bindings: their explicit operator
+allowlist and live annotations are policy inputs, not Capability conformance or
+proof that effects cannot occur.
+
+At the Capability JSONL v0.1 boundary, provider errors have exact fields
+`{code,message}` or `{code,message,retryable}`. Retryability belongs to the
+bound Capability Profile. The runtime accepts an older adapter that omits the
+echo, rejects a conflicting echo or any extra field, and always returns the
+Profile-derived value to its caller.
+
+The runtime does not repair semantic version drift. A cataloged Capability or
+Procedure identity is immutable; changed effects, errors, causal order, or
+completion enter under a new semantic version and the host configuration moves
+explicitly. Process reuse, scheduling, fairness, cancellation, and other
+implementation improvements may evolve without a semantic version change only
+when the selected contract remains conserved.
 
 These are host binding checks and runtime observations, not Capability L0/L1
 conformance or installed-package proof. A spawned JSONL process is reported as
@@ -123,6 +171,17 @@ calls. Token use and money outside the runtime remain `null`/unobserved. Cold
 Agent, cold direct, warm direct, and native provider batch are separate routes;
 one cannot be converted into a universal savings percentage from a single
 provider or machine.
+
+An optional execution observation preserves the same zero-model/null-external-
+cost boundary and adds only numeric payload sizes and runtime timing. Agent Tool
+Observer can aggregate these events, but neither component allocates an Agent
+turn's token use or monetary cost to one direct call.
+
+Contract projection reduces host-side acquisition and validation after an
+operation has been selected. It does not retroactively reduce the initial tool
+catalog already supplied by an Agent shell. Shells that do not expose a public
+dynamic-schema hook continue to receive the provider's compact ordinary MCP
+catalog.
 
 ## Non-goals
 

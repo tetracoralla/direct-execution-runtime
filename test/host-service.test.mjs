@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { prepareRuntimeConfig } from '../src/config.mjs'
 import { requestDirectHost } from '../src/host-client.mjs'
 import { HOST_REQUEST_VERSION } from '../src/host-protocol.mjs'
-import { DirectHostService } from '../src/host-service.mjs'
+import { DirectHostService, waitForSocketIdentity } from '../src/host-service.mjs'
 import { DirectExecutionRuntime } from '../src/runtime.mjs'
 import { assertSchema, createValidator, loadBundledSchema } from '../src/schema.mjs'
 import { fakeCall, fakeConfig, workOrder } from './helpers.mjs'
@@ -66,6 +66,23 @@ test('persistent host service reuses one provider session across separate client
     assert.equal(second.calls[0].result.value, 'two')
     assert.equal(runtime.sessionSnapshot()[0].present, true)
 
+    const projected = await requestDirectHost({
+      socketPath,
+      action: 'project',
+      selection: {
+        schemaVersion: 'openadam.direct-contract-selection.v0.1',
+        providerId: 'test.fake-capability',
+        target: {
+          kind: 'capability',
+          capabilityId: 'org.openadam.test.echo',
+          capabilityVersion: '0.1.0',
+          operationId: 'echo',
+        },
+      },
+    })
+    assert.equal(projected.contract.contractSource, 'configured-files')
+    assert.equal(projected.target.operationId, 'echo')
+
     const duplicateRuntime = new DirectExecutionRuntime(await prepareRuntimeConfig(fakeConfig()))
     const duplicate = new DirectHostService(duplicateRuntime, { socketPath, replaceStaleSocket: true })
     await assert.rejects(() => duplicate.start(), (error) => error.code === 'HOST_SERVICE_IN_USE')
@@ -75,6 +92,22 @@ test('persistent host service reuses one provider session across separate client
     await assert.rejects(() => access(socketPath), (error) => error.code === 'ENOENT')
     assert.equal(runtime.sessionSnapshot()[0].present, false)
   })
+})
+
+test('cold host service waits for the listening Socket to become filesystem-visible', async () => {
+  let inspections = 0
+  let delays = 0
+  const identity = await waitForSocketIdentity('/private/runtime.sock', {
+    lstat: async () => {
+      inspections += 1
+      if (inspections < 3) throw Object.assign(new Error('not visible yet'), { code: 'ENOENT' })
+      return { isSocket: () => true, dev: 1, ino: 2 }
+    },
+    delay: async () => { delays += 1 },
+  })
+  assert.equal(identity.ino, 2)
+  assert.equal(inspections, 3)
+  assert.equal(delays, 2)
 })
 
 test('invalid host protocol input is bounded and does not poison the next request', async () => {
@@ -172,6 +205,18 @@ test('host service refuses a socket directory accessible by other users', async 
     await service.close()
   } finally {
     await chmod(directory, 0o700)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('host service rejects an overlong Unix Socket path before listening can truncate it', async () => {
+  const directory = await mkdtemp(resolve(tmpdir(), 'direct-host-long-socket-'))
+  const runtime = new DirectExecutionRuntime(await prepareRuntimeConfig(fakeConfig()))
+  try {
+    const service = new DirectHostService(runtime, { socketPath: resolve(directory, 'x'.repeat(180)) })
+    await assert.rejects(() => service.start(), (error) => error.code === 'HOST_CONFIG_INVALID' && error.message.includes('platform limit'))
+    await service.close()
+  } finally {
     await rm(directory, { recursive: true, force: true })
   }
 })

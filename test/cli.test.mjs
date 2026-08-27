@@ -39,6 +39,19 @@ test('CLI validates and runs one stdin work order without persisting it', async 
     const ran = await runCli(['run', '--config', configPath, '--work-order', '-'], order)
     assert.equal(ran.code, 0, ran.stderr)
     assert.equal(JSON.parse(ran.stdout).calls[0].result.value, 'cli-ok')
+    const selection = JSON.stringify({
+      schemaVersion: 'openadam.direct-contract-selection.v0.1',
+      providerId: 'test.fake-capability',
+      target: {
+        kind: 'capability',
+        capabilityId: 'org.openadam.test.echo',
+        capabilityVersion: '0.1.0',
+        operationId: 'echo',
+      },
+    })
+    const projected = await runCli(['project', '--config', configPath, '--selection', '-'], selection)
+    assert.equal(projected.code, 0, projected.stderr)
+    assert.equal(JSON.parse(projected.stdout).target.operationId, 'echo')
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

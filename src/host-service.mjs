@@ -1,5 +1,6 @@
 import { chmod, lstat, realpath, stat, unlink } from 'node:fs/promises'
 import { connect, createServer } from 'node:net'
+import { platform } from 'node:os'
 import { basename, dirname, isAbsolute, resolve } from 'node:path'
 import { HostError } from './errors.mjs'
 import { assertHostRequest, hostFailure, hostSuccess, HOST_SERVICE_VERSION } from './host-protocol.mjs'
@@ -7,9 +8,15 @@ import { jsonBytes, parseStrictJson } from './json.mjs'
 
 const ENVELOPE_ALLOWANCE_BYTES = 64 * 1024
 const DEFAULT_REQUEST_RECEIVE_TIMEOUT_MS = 30_000
+const SOCKET_VISIBILITY_ATTEMPTS = 100
+const SOCKET_VISIBILITY_DELAY_MS = 5
+const UNIX_SOCKET_PATH_MAX_BYTES = platform() === 'darwin' ? 103 : 107
 
 async function secureSocketPath(path) {
   if (!isAbsolute(path)) throw new HostError('HOST_CONFIG_INVALID', 'Host socket path must be absolute')
+  if (Buffer.byteLength(path) > UNIX_SOCKET_PATH_MAX_BYTES) {
+    throw new HostError('HOST_CONFIG_INVALID', `Host socket path exceeds the ${UNIX_SOCKET_PATH_MAX_BYTES}-byte platform limit`)
+  }
   const name = basename(path)
   if (name.length === 0 || name === '.' || name === '..') {
     throw new HostError('HOST_CONFIG_INVALID', 'Host socket path must name a socket file')
@@ -66,6 +73,22 @@ function sameFile(left, right) {
   return left !== undefined && right !== undefined && left.dev === right.dev && left.ino === right.ino
 }
 
+export async function waitForSocketIdentity(path, dependencies = {}) {
+  const inspect = dependencies.lstat ?? lstat
+  const delay = dependencies.delay ?? ((duration) => new Promise((resolvePromise) => setTimeout(resolvePromise, duration)))
+  for (let attempt = 0; attempt < SOCKET_VISIBILITY_ATTEMPTS; attempt += 1) {
+    try {
+      const identity = await inspect(path)
+      if (!identity.isSocket()) throw new HostError('HOST_SERVICE_UNAVAILABLE', 'Host service listener did not create a Unix Socket')
+      return identity
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+      if (attempt + 1 < SOCKET_VISIBILITY_ATTEMPTS) await delay(SOCKET_VISIBILITY_DELAY_MS)
+    }
+  }
+  throw new HostError('HOST_SERVICE_UNAVAILABLE', 'Host service Socket did not become visible after listening')
+}
+
 export class DirectHostService {
   #server
   #socketIdentity
@@ -114,8 +137,13 @@ export class DirectHostService {
         server.once('listening', onListening)
         server.listen(this.socketPath)
       })
+      const createdIdentity = await waitForSocketIdentity(this.socketPath)
       await chmod(this.socketPath, 0o600)
-      this.#socketIdentity = await lstat(this.socketPath)
+      const securedIdentity = await lstat(this.socketPath)
+      if (!securedIdentity.isSocket() || !sameFile(createdIdentity, securedIdentity)) {
+        throw new HostError('HOST_SERVICE_UNAVAILABLE', 'Host service Socket identity changed while securing it')
+      }
+      this.#socketIdentity = securedIdentity
     } catch (error) {
       this.#server = undefined
       await new Promise((resolvePromise) => server.close(() => resolvePromise())).catch(() => {})
@@ -192,6 +220,8 @@ export class DirectHostService {
           this.#controllers.add(controller)
           const result = request.action === 'inspect'
             ? await this.runtime.inspectBindings()
+            : request.action === 'project'
+              ? await this.runtime.projectContract(request.selection)
             : request.action === 'validate'
               ? await this.runtime.validateWorkOrder(request.workOrder)
               : await this.runtime.runWorkOrder(request.workOrder, { signal: controller.signal })
