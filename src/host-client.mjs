@@ -46,7 +46,10 @@ export async function requestDirectHost({
   return await new Promise((resolve, reject) => {
     let settled = false
     let buffer = Buffer.alloc(0)
-    const socket = createConnection({ path: socketPath, allowHalfOpen: true })
+    // The write side stays open until the response arrives. Servers frame one
+    // JSON line per connection and end the socket themselves; half-closing
+    // here would make installed 0.1.x services discard their response.
+    const socket = createConnection({ path: socketPath })
     const finish = (method, value) => {
       if (settled) return
       settled = true
@@ -64,7 +67,7 @@ export async function requestDirectHost({
       abort()
       return
     }
-    socket.once('connect', () => socket.end(requestLine))
+    socket.once('connect', () => socket.write(requestLine))
     socket.on('data', (chunk) => {
       if (settled) return
       buffer = Buffer.concat([buffer, chunk])
@@ -72,15 +75,9 @@ export async function requestDirectHost({
         finish(reject, new HostError('HOST_PROVIDER_RESPONSE_TOO_LARGE', 'Host service response exceeds the client byte limit'))
         return
       }
-    })
-    socket.once('end', () => {
-      if (settled) return
+      const newline = buffer.indexOf(0x0a)
+      if (newline === -1) return
       try {
-        const newline = buffer.indexOf(0x0a)
-        if (newline === -1) {
-          finish(reject, new HostError('HOST_TRANSPORT_ERROR', 'Host service closed without a complete response', { retryable: true }))
-          return
-        }
         if (newline !== buffer.length - 1) {
           decodeUtf8Strict(buffer.subarray(newline + 1), 'host response trailing bytes')
           finish(reject, new HostError('HOST_PROTOCOL_ERROR', 'Host service returned more than one response'))
@@ -96,6 +93,16 @@ export async function requestDirectHost({
       } catch (error) {
         finish(reject, error)
       }
+    })
+    socket.once('end', () => {
+      if (settled) return
+      finish(reject, new HostError(
+        'HOST_TRANSPORT_ERROR',
+        buffer.length === 0
+          ? 'Host service closed without a response; the installed service may predate the current client'
+          : 'Host service closed without a complete response',
+        { retryable: true },
+      ))
     })
     socket.once('error', (error) => {
       finish(reject, new HostError('HOST_SERVICE_UNAVAILABLE', `Host service connection failed: ${error.message}`, {

@@ -245,22 +245,24 @@ test('host shutdown aborts active work and reaps the owned provider process', as
   })
 })
 
-test('host client waits for EOF and rejects a delayed second response', async () => {
+test('host client resolves the first complete response line and rejects a second response in the same frame', async () => {
   const directory = await mkdtemp(resolve(tmpdir(), 'direct-host-client-framing-'))
   const socketPath = resolve(directory, 'runtime.sock')
-  const server = createServer({ allowHalfOpen: true }, (socket) => {
+  const server = createServer((socket) => {
     const chunks = []
-    socket.on('data', (chunk) => chunks.push(chunk))
-    socket.once('end', () => {
-      const request = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    socket.on('data', (chunk) => {
+      chunks.push(chunk)
+      const buffer = Buffer.concat(chunks)
+      if (!buffer.includes(0x0a)) return
+      socket.removeAllListeners('data')
+      const request = JSON.parse(buffer.toString('utf8').split('\n')[0])
       const response = {
         schemaVersion: HOST_RESPONSE_VERSION,
         id: request.id,
         status: 'ok',
         result: {},
       }
-      socket.write(`${JSON.stringify(response)}\n`)
-      setTimeout(() => socket.end(`${JSON.stringify(response)}\n`), 10)
+      socket.write(`${JSON.stringify(response)}\n${JSON.stringify(response)}\n`)
     })
   })
   try {
@@ -276,6 +278,68 @@ test('host client waits for EOF and rejects a delayed second response', async ()
     await new Promise((resolvePromise) => server.close(() => resolvePromise()))
     await rm(directory, { recursive: true, force: true })
   }
+})
+
+test('host client accepts a service that responds before any client EOF (installed 0.1.x framing)', async () => {
+  const directory = await mkdtemp(resolve(tmpdir(), 'direct-host-client-legacy-'))
+  const socketPath = resolve(directory, 'runtime.sock')
+  const server = createServer((socket) => {
+    const chunks = []
+    socket.on('data', (chunk) => {
+      chunks.push(chunk)
+      const buffer = Buffer.concat(chunks)
+      if (!buffer.includes(0x0a)) return
+      const request = JSON.parse(buffer.toString('utf8').split('\n')[0])
+      const response = {
+        schemaVersion: HOST_RESPONSE_VERSION,
+        id: request.id,
+        status: 'ok',
+        result: { legacy: true },
+      }
+      socket.write(`${JSON.stringify(response)}\n`)
+      // Deliberately keeps the write side open afterwards: the client must
+      // settle on the first complete line instead of waiting for an EOF.
+    })
+  })
+  try {
+    await new Promise((resolvePromise, reject) => {
+      server.once('error', reject)
+      server.listen(socketPath, resolvePromise)
+    })
+    const result = await requestDirectHost({ socketPath, action: 'inspect' })
+    assert.equal(result.legacy, true)
+  } finally {
+    await new Promise((resolvePromise) => server.close(() => resolvePromise()))
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('host service answers a client that keeps its write side open', async () => {
+  await withService(async ({ socketPath }) => {
+    const response = await new Promise((resolvePromise, reject) => {
+      const chunks = []
+      const socket = connect({ path: socketPath })
+      const timer = setTimeout(() => {
+        socket.destroy()
+        reject(new Error('service never answered a client that did not half-close'))
+      }, 5_000)
+      socket.once('connect', () => {
+        socket.write(`{"schemaVersion":"${HOST_REQUEST_VERSION}","id":"no-half-close","action":"inspect"}\n`)
+      })
+      socket.on('data', (chunk) => chunks.push(chunk))
+      socket.once('end', () => {
+        clearTimeout(timer)
+        socket.destroy()
+        resolvePromise(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+      })
+      socket.once('error', (error) => {
+        clearTimeout(timer)
+        reject(error)
+      })
+    })
+    assert.equal(response.id, 'no-half-close')
+    assert.equal(response.status, 'ok')
+  })
 })
 
 test('host service refuses a socket directory accessible by other users', async () => {

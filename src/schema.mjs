@@ -4,8 +4,21 @@ import addFormats from 'ajv-formats'
 import { HostError } from './errors.mjs'
 import { decodeUtf8Strict, parseStrictJson } from './json.mjs'
 
+// Published provider schemas still carry `format: "uint32"/"uint64"` claims
+// (installed Projective releases do). Without these registrations Ajv only
+// logs an unknown-format warning and validates no range at all.
+function unsignedIntegerFormat(bits) {
+  const limit = 2 ** bits
+  return {
+    type: 'number',
+    validate: (value) => Number.isInteger(value) && value >= 0 && value < limit,
+  }
+}
+
 export function createValidator() {
   const ajv = new Ajv2020({ allErrors: true, strict: false, validateFormats: true })
+  ajv.addFormat('uint32', unsignedIntegerFormat(32))
+  ajv.addFormat('uint64', unsignedIntegerFormat(64))
   addFormats(ajv)
   return ajv
 }

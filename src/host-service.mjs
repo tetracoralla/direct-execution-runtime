@@ -192,22 +192,28 @@ export class DirectHostService {
       if (!processing && !responded) fail(new HostError('HOST_TIMEOUT', 'Host service did not receive a complete request before its deadline'))
     })
 
+    // A complete newline-terminated request line starts processing immediately,
+    // before any client EOF. This keeps one framing across clients that
+    // half-close after the request and clients that keep the write side open
+    // while waiting for the response (installed 0.1.x clients).
     socket.on('data', (chunk) => {
       if (responded) return
       buffer = Buffer.concat([buffer, chunk])
       if (buffer.length > this.requestLimit) {
         fail(new HostError('HOST_INPUT_TOO_LARGE', 'Host service request exceeds its complete envelope limit'))
-      }
-    })
-    socket.once('end', () => {
-      if (responded || processing) return
-      processing = true
-      socket.setTimeout(0)
-      const newline = buffer.indexOf(0x0a)
-      if (newline === -1) {
-        fail(new HostError('HOST_PROTOCOL_ERROR', 'Host service request ended without one complete JSON line'))
         return
       }
+      if (processing) {
+        if (chunk.toString('utf8').trim().length !== 0) {
+          controller?.abort()
+          fail(new HostError('HOST_PROTOCOL_ERROR', 'Host service accepts exactly one request per connection'))
+        }
+        return
+      }
+      const newline = buffer.indexOf(0x0a)
+      if (newline === -1) return
+      processing = true
+      socket.setTimeout(0)
       try {
         if (newline !== buffer.length - 1) {
           decodeUtf8Strict(buffer.subarray(newline + 1), 'host request trailing bytes')
@@ -242,6 +248,10 @@ export class DirectHostService {
           if (controller !== undefined) this.#controllers.delete(controller)
         }
       })()
+    })
+    socket.once('end', () => {
+      if (responded || processing) return
+      fail(new HostError('HOST_PROTOCOL_ERROR', 'Host service request ended without one complete JSON line'))
     })
     socket.once('close', () => {
       if (!responded) controller?.abort()
