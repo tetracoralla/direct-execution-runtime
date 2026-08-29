@@ -70,16 +70,22 @@ command arguments.
 
 Before any new JSONL or MCP session starts, the runtime reacquires the current
 executable path and bytes plus the configured arguments, contract/Profile or
-manifest material, and declared identity-file digests. A mismatch with the
-prepared binding fails closed as `HOST_PROVIDER_REPLACED`; the runtime does not
-run changed provider code while reporting an older binding digest. It then
-copies the resolved command and every declared identity file into a private
-mode-`0700` per-session execution view, verifies each copied byte stream against
-the prepared digest, and launches the single-link read-only copies. Only the
-command, arguments that resolve exactly to declared identity files, and PATH
-directories containing declared executables are redirected into that view.
-The configured canonical working directory and `PWD` remain the original
-provider root, and work-order input paths are never rewritten, so an authorized
+manifest material, declared identity-file digests, and the canonical
+(symlink-resolved) target each declared argument had at binding preparation.
+A mismatch with the prepared binding fails closed as
+`HOST_PROVIDER_REPLACED`; the runtime does not run changed provider code while
+reporting an older binding digest. It then copies the resolved command and
+every declared identity file into a private mode-`0700` per-session execution
+view, verifies each copied byte stream against the prepared digest, and
+launches the single-link read-only copies. Only the command, identity-file
+arguments, and PATH directories containing declared executables are redirected
+into that view. An identity-file argument is one whose canonical
+(symlink-resolved) target is a declared identity file at binding preparation;
+the recorded target — not the launch-time spelling — is redirected to the
+frozen copy, and a reference that later resolves elsewhere fails closed as
+`HOST_PROVIDER_REPLACED` before any new provider process starts. The
+configured canonical working directory and `PWD` remain the original provider
+root, and work-order input paths are never rewritten, so an authorized
 business workspace does not become a sparse staging tree.
 
 An already running warm process therefore keeps using its frozen declared

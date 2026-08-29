@@ -175,14 +175,17 @@ proof that effects cannot occur.
 
 Immediately before spawn, the Host copies the resolved command and declared
 identity files into one private per-session execution view and verifies their
-prepared digests while copying. Actual launch uses that frozen command; exact
-identity-file arguments and PATH-resolved declared executables are redirected
+prepared digests while copying. Actual launch uses that frozen command;
+identity-file arguments — classified once at binding preparation by their
+symlink-resolved target and rewritten from that record rather than by
+launch-time spelling — and PATH-resolved declared executables are redirected
 to their frozen copies. The canonical configured working directory stays on the
 original authorized provider root, and request values are not path-rewritten.
 This separates fixed provider execution bytes from business input paths. A warm
 session can continue after its source identity file is replaced, while a new
 cold session fails current-source revalidation until the declared identity is
-restored.
+restored; an identity argument whose reference no longer resolves to the
+recorded declared identity fails that same revalidation.
 
 The execution view is not a sandbox or a complete filesystem snapshot.
 Undeclared imports, interpreter binaries and libraries, adjacent package-loader

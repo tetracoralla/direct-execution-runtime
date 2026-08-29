@@ -18,8 +18,10 @@ current verdict.
    graph, implementation stages, adapter entry, and schema digests agree; MCP
    execution identity covers arguments, working directory,
    provider-owned identity files, and the live schemas reacquired after every
-   replacement. The launched command and exact declared execution references
-   use verified private copies, while the original canonical working directory
+   replacement. The launched command and declared execution references —
+   classified by their preparation-time symlink-resolved target, not by
+   launch-time spelling — use verified private copies, while the original
+   canonical working directory
    and work-order paths remain outside that execution view.
 4. The direct boundary accepts only read-only, non-destructive, idempotent,
    closed-world operations. Procedure admission requires aggregate
@@ -114,6 +116,8 @@ current verdict.
 - unknown projected MCP operation, target/input operation mismatch, malformed,
   rejected, or oversized schema-lookup response, and a schema-invalid item
   inside an otherwise valid native batch;
+- a native batch tool that is itself an operation projection target is
+  rejected at configuration time;
 - live MCP schema rejects an extra or wrong-typed argument;
 - MCP catalog pages: allowed tools spread across declared pagination pages
   still bind and execute, while a catalog whose pagination cursor never
@@ -178,6 +182,11 @@ current verdict.
   before any new provider process starts; after an actual session snapshot,
   remove a declared executable and require the warm session to keep using its
   verified copy, a replacement cold start to fail, and restoration to recover;
+- reference an identity file through a symlink or other alternate spelling in
+  a declared argument: the warm session keeps reading frozen bytes after the
+  link is repointed, the drifted reference fails closed as
+  `HOST_PROVIDER_REPLACED` before any new provider process starts, and
+  restoring the reference recovers cold;
 - run a real relative workspace-path Procedure while its command and declared
   PATH executables use private staged bytes; require the business cwd to remain
   the original authorized provider root and reject any staging symlink as a

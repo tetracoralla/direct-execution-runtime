@@ -163,9 +163,10 @@ export class JsonlSession {
     this.#launchSnapshot = launchSnapshot
     let child
     try {
+      const environment = await launchSnapshot.prepareEnvironment(getDefaultEnvironment())
       child = spawn(launchSnapshot.command, launchSnapshot.args, {
         cwd: launchSnapshot.cwd,
-        env: launchSnapshot.prepareEnvironment(getDefaultEnvironment()),
+        env: environment,
         detached: true,
         stdio: ['pipe', 'pipe', 'pipe'],
         shell: false,

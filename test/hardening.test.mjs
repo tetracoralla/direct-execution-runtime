@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { access, cp, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import { access, cp, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -239,10 +239,11 @@ test('provider sessions execute private frozen command and identity bytes, then 
       '',
     ].join('\n'))
 
+    const frozenEnvironment = await snapshot.prepareEnvironment(process.env)
     const response = await new Promise((resolvePromise, reject) => {
       const child = spawn(snapshot.command, snapshot.args, {
         cwd: snapshot.cwd,
-        env: snapshot.prepareEnvironment(process.env),
+        env: frozenEnvironment,
         stdio: ['pipe', 'pipe', 'pipe'],
       })
       const stdout = []
@@ -292,6 +293,71 @@ test('provider sessions execute private frozen command and identity bytes, then 
     }
   } finally {
     await snapshot?.dispose()
+    await rm(parent, { recursive: true, force: true })
+  }
+})
+
+test('identity arguments referenced through a symlink stay frozen and drifted references fail closed', async () => {
+  const parent = await mkdtemp(resolve(tmpdir(), 'direct-runtime-symlink-identity-'))
+  const providerRoot = resolve(parent, 'provider')
+  const identityFiles = () => [
+    resolve(providerRoot, 'identity-arg-adapter.mjs'),
+    resolve(providerRoot, 'identity-real.txt'),
+  ]
+  let runtime
+  try {
+    await cp(fakeRoot, providerRoot, { recursive: true })
+    await writeFile(resolve(providerRoot, 'identity-real.txt'), 'ORIGINAL-BYTES\n')
+    await writeFile(resolve(providerRoot, 'identity-other.txt'), 'PWNED-BYTES\n')
+    await symlink('identity-real.txt', resolve(providerRoot, 'identity-link.json'))
+    await writeFile(resolve(providerRoot, 'identity-arg-adapter.mjs'), [
+      "import { readFileSync } from 'node:fs'",
+      "import { createInterface } from 'node:readline'",
+      'const identityPath = process.argv.find((value) => value.startsWith("--identity-file=")).split("=")[1]',
+      'const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })',
+      'for await (const line of lines) {',
+      '  const request = JSON.parse(line)',
+      '  process.stdout.write(`${JSON.stringify({ id: request.id, ok: true, result: { value: readFileSync(identityPath, "utf8").trim() } })}\\n`)',
+      '}',
+      '',
+    ].join('\n'))
+    const manifest = parseStrictJson(
+      await readFile(resolve(providerRoot, 'provider.json'), 'utf8'),
+      'provider manifest',
+    )
+    manifest.implementations[0].adapter.args = ['identity-arg-adapter.mjs', '--identity-file=identity-link.json']
+    await writeFile(resolve(providerRoot, 'provider.json'), JSON.stringify(manifest))
+
+    runtime = new DirectExecutionRuntime(await prepareRuntimeConfig(fakeConfig({
+      rootPath: providerRoot,
+      identityFiles: identityFiles(),
+    })))
+    const read = () => fakeCall('read', { value: 'read' })
+    const first = await runtime.runWorkOrder(workOrder('symlink-identity', [read()]))
+    assert.equal(first.calls[0].status, 'ok')
+    assert.equal(first.calls[0].result.value, 'ORIGINAL-BYTES')
+
+    await rm(resolve(providerRoot, 'identity-link.json'))
+    await symlink('identity-other.txt', resolve(providerRoot, 'identity-link.json'))
+
+    const warm = await runtime.runWorkOrder(workOrder('symlink-warm', [read()]))
+    assert.equal(warm.calls[0].status, 'ok')
+    assert.equal(warm.calls[0].result.value, 'ORIGINAL-BYTES')
+    assert.equal(warm.calls[0].session, 'warm')
+
+    await runtime.replaceProvider('test.fake-capability')
+    const drifted = await runtime.runWorkOrder(workOrder('symlink-cold', [read()]))
+    assert.equal(drifted.calls[0].status, 'host_error')
+    assert.equal(drifted.calls[0].error.code, 'HOST_PROVIDER_REPLACED')
+
+    await rm(resolve(providerRoot, 'identity-link.json'))
+    await symlink('identity-real.txt', resolve(providerRoot, 'identity-link.json'))
+    const recovered = await runtime.runWorkOrder(workOrder('symlink-recovered', [read()]))
+    assert.equal(recovered.calls[0].status, 'ok')
+    assert.equal(recovered.calls[0].result.value, 'ORIGINAL-BYTES')
+    assert.equal(recovered.calls[0].session, 'cold')
+  } finally {
+    await runtime?.close()
     await rm(parent, { recursive: true, force: true })
   }
 })

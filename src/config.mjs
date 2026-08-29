@@ -215,6 +215,46 @@ async function launchIdentityFiles(rootPath, declaredRootPath, paths, identities
   return launchFiles.sort((left, right) => left.path.localeCompare(right.path))
 }
 
+/**
+ * Classifies one declared adapter or MCP argument against the declared
+ * identity files by its current symlink-resolved target, so the recorded
+ * reference — not the argument's spelling at launch time — defines which
+ * frozen copy the provider receives.
+ */
+async function identityArgumentReference(argument, cwd, identityBySource) {
+  const segments = [{ kind: 'value', value: argument }]
+  const separator = argument.indexOf('=')
+  if (separator !== -1) segments.push({ kind: 'suffix', value: argument.slice(separator + 1) })
+  for (const segment of segments) {
+    if (segment.value.length === 0) continue
+    const candidate = isAbsolute(segment.value) ? resolve(segment.value) : resolve(cwd, segment.value)
+    const real = await realpath(candidate).catch(() => null)
+    if (real === null) continue
+    const identity = identityBySource.get(real)
+    if (identity !== undefined) {
+      return { kind: segment.kind, sourcePath: identity.sourcePath, path: identity.path, digest: identity.digest }
+    }
+  }
+  return null
+}
+
+async function argumentIdentityReferences(args, cwd, launchIdentities) {
+  const identityBySource = new Map(launchIdentities.map((identity) => [identity.sourcePath, identity]))
+  const references = []
+  for (const argument of args) {
+    references.push(await identityArgumentReference(argument, cwd, identityBySource))
+  }
+  return references
+}
+
+function bindingArgumentReferences(argumentReferences) {
+  return argumentReferences.map((reference) => reference === null ? null : {
+    kind: reference.kind,
+    path: reference.path,
+    digest: reference.digest,
+  })
+}
+
 async function readContractSchema(path, label) {
   const body = await readFile(path)
   if (body.length > CONFIG_FILE_LIMIT) {
@@ -475,6 +515,7 @@ async function prepareCapabilityProvider(provider, limits) {
     identities,
     'Capability identity file',
   )
+  const argumentReferences = await argumentIdentityReferences(adapterArgs, cwdPath, launchIdentities)
 
   const manifestDigest = digestJson(manifest)
   const commandDigest = await digestFile(adapterCommand)
@@ -503,6 +544,7 @@ async function prepareCapabilityProvider(provider, limits) {
     contractDigest,
     identityDigests: identities,
     launchIdentityFiles: launchIdentities,
+    argumentReferences,
     bindingDigest: digestJson({
       providerId: provider.providerId,
       providerVersion: manifest.provider.version,
@@ -513,6 +555,7 @@ async function prepareCapabilityProvider(provider, limits) {
       adapterExecutable: adapterCommand,
       commandDigest,
       adapterArgs,
+      argumentReferences: bindingArgumentReferences(argumentReferences),
       adapterCwd: relative(rootPath, cwdPath) || '.',
       identityFiles: launchIdentities.map(({ path, digest }) => ({ path, digest })),
       contractDigest,
@@ -708,6 +751,7 @@ async function prepareProcedureProvider(provider, limits) {
     identities,
     'Procedure identity file',
   )
+  const argumentReferences = await argumentIdentityReferences(adapterArgs, adapterCwd, launchIdentities)
 
   const ajv = createValidator()
   const implementationManifestDigest = digestJson(manifest)
@@ -744,6 +788,7 @@ async function prepareProcedureProvider(provider, limits) {
     commandDigest,
     identityDigests: identities,
     launchIdentityFiles: launchIdentities,
+    argumentReferences,
     contractDigest,
     procedureErrors,
     bindingDigest: digestJson({
@@ -756,6 +801,7 @@ async function prepareProcedureProvider(provider, limits) {
       adapterExecutable: adapterCommand,
       commandDigest,
       adapterArgs,
+      argumentReferences: bindingArgumentReferences(argumentReferences),
       adapterCwd: relative(rootPath, adapterCwd) || '.',
       identityFiles: launchIdentities.map(({ path, digest }) => ({ path, digest })),
       contractDigest,
@@ -783,6 +829,7 @@ async function prepareMcpProvider(provider, limits) {
     identities,
     'MCP identity file',
   )
+  const argumentReferences = await argumentIdentityReferences(provider.args, cwd, launchIdentities)
   const projectionDefinitions = new Map()
   const batchProjectionDefinitions = new Map()
   for (const declaration of provider.operationProjections ?? []) {
@@ -826,6 +873,14 @@ async function prepareMcpProvider(provider, limits) {
       batchProjectionDefinitions.set(declaration.batchToolName, declaration)
     }
   }
+  for (const batchToolName of batchProjectionDefinitions.keys()) {
+    if (projectionDefinitions.has(batchToolName)) {
+      throw new HostError(
+        'HOST_CONFIG_INVALID',
+        `Projected MCP batch tool ${batchToolName} cannot itself be an operation projection target`,
+      )
+    }
+  }
   const operationProjections = [...(provider.operationProjections ?? [])]
     .sort((left, right) => left.toolName.localeCompare(right.toolName))
   return {
@@ -836,6 +891,7 @@ async function prepareMcpProvider(provider, limits) {
     commandDigest,
     identityDigests: identities,
     launchIdentityFiles: launchIdentities,
+    argumentReferences,
     projectionDefinitions,
     batchProjectionDefinitions,
     bindingDigest: digestJson({
@@ -844,6 +900,7 @@ async function prepareMcpProvider(provider, limits) {
       commandDigest,
       command: relative(rootPath, command),
       args: provider.args,
+      argumentReferences: bindingArgumentReferences(argumentReferences),
       cwd: relative(rootPath, cwd) || '.',
       identityFiles: launchIdentities.map(({ path, digest }) => ({ path, digest })),
       lifecycle: provider.lifecycle,

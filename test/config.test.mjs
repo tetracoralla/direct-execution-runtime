@@ -206,6 +206,17 @@ test('MCP operation projection and native batch declarations are explicit bindin
     () => prepareRuntimeConfig(invalid),
     (error) => error.code === 'HOST_CONFIG_INVALID' && /distinct allowed tool/.test(error.message),
   )
+
+  const selfTargeting = fakeProjectedMcpConfig()
+  selfTargeting.providers[0].operationProjections.push({
+    toolName: 'dispatch.batch',
+    operationField: 'operation',
+    argumentsField: 'arguments',
+  })
+  await assert.rejects(
+    () => prepareRuntimeConfig(selfTargeting),
+    (error) => error.code === 'HOST_CONFIG_INVALID' && /cannot itself be an operation projection target/.test(error.message),
+  )
 })
 
 test('MCP operation schema lookup is explicit binding identity and must name an allowed tool', async () => {

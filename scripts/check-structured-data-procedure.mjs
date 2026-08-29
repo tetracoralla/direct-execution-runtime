@@ -52,7 +52,7 @@ async function inspectLaunchPlan(binding, packaged) {
     assert.equal(snapshot.cwd, packaged.bindingRoot)
     assert.notEqual(snapshot.command, binding.adapterCommand)
     assert.equal(await digestFile(snapshot.command), binding.commandDigest)
-    const environment = snapshot.prepareEnvironment({ PATH: process.env.PATH })
+    const environment = await snapshot.prepareEnvironment({ PATH: process.env.PATH })
     const firstPathEntry = environment.PATH.split(delimiter)[0]
     assert.notEqual(firstPathEntry, packaged.commands)
     assert.match(firstPathEntry, /openadam-direct-launch-.+\/filesystem\//u)

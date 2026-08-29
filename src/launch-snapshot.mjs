@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { chmod, lstat, mkdir, mkdtemp, open, readdir, rm, symlink } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, open, readdir, realpath, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { HostError } from './errors.mjs'
@@ -84,30 +84,42 @@ async function copyVerifiedFile(sourcePath, destinationPath, expectedDigest, exe
   }
 }
 
-function rewriteDeclaredArgument(argument, cwd, stagedBySourcePath) {
-  const rewrite = (value) => {
-    if (value.length === 0) return value
-    const sourcePath = isAbsolute(value) ? resolve(value) : resolve(cwd, value)
-    return stagedBySourcePath.get(sourcePath) ?? value
-  }
-  const direct = rewrite(argument)
-  if (direct !== argument) return direct
-  const separator = argument.indexOf('=')
-  if (separator === -1) return argument
-  return `${argument.slice(0, separator + 1)}${rewrite(argument.slice(separator + 1))}`
+function stagedArguments(args, references, stagedBySourcePath) {
+  return args.map((argument, index) => {
+    const reference = references[index]
+    if (reference === undefined || reference === null) return argument
+    const staged = stagedBySourcePath.get(reference.sourcePath)
+    if (staged === undefined) {
+      throw new HostError('HOST_PROVIDER_REPLACED', 'Provider identity argument has no staged copy', {
+        retryable: true,
+      })
+    }
+    if (reference.kind === 'value') return staged
+    const separator = argument.indexOf('=')
+    if (separator === -1) {
+      throw new HostError('HOST_PROVIDER_REPLACED', 'Provider identity argument changed shape', {
+        retryable: true,
+      })
+    }
+    return `${argument.slice(0, separator + 1)}${staged}`
+  })
 }
 
-function prepareEnvironment(environment, cwd, stagedDirectories) {
+async function prepareEnvironment(environment, cwd, stagedDirectories) {
   const prepared = { ...environment, PWD: cwd }
   for (const key of ['PATH', 'Path']) {
     if (typeof prepared[key] !== 'string') continue
-    prepared[key] = prepared[key]
-      .split(delimiter)
-      .map((entry) => {
-        if (entry.length === 0 || !isAbsolute(entry)) return entry
-        return stagedDirectories.get(resolve(entry)) ?? entry
-      })
-      .join(delimiter)
+    const entries = []
+    for (const entry of prepared[key].split(delimiter)) {
+      if (entry.length === 0 || !isAbsolute(entry)) {
+        entries.push(entry)
+        continue
+      }
+      const canonical = await realpath(entry).catch(() => null)
+      const staged = stagedDirectories.get(resolve(entry)) ?? stagedDirectories.get(canonical)
+      entries.push(staged ?? entry)
+    }
+    prepared[key] = entries.join(delimiter)
   }
   return prepared
 }
@@ -223,7 +235,7 @@ export async function createLaunchSnapshot(binding) {
       }
       stagedDirectories.set(sourceDirectory, stagedDirectory)
     }
-    const args = fields.args.map((argument) => rewriteDeclaredArgument(argument, fields.cwd, stagedBySourcePath))
+    const args = stagedArguments(fields.args, binding.argumentReferences ?? [], stagedBySourcePath)
     const commandInfo = await lstat(command)
     if (!commandInfo.isFile() || commandInfo.nlink !== 1 || (commandInfo.mode & 0o111) === 0) {
       throw new HostError('HOST_PROVIDER_REPLACED', 'Frozen provider command is not one private executable file', {

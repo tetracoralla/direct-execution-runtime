@@ -151,11 +151,12 @@ export class McpSession {
       throw new HostError('HOST_PROVIDER_REPLACED', 'MCP session startup was replaced', { retryable: true })
     }
     this.#launchSnapshot = launchSnapshot
+    const environment = await launchSnapshot.prepareEnvironment(getDefaultEnvironment())
     const transport = new StrictMcpStdioTransport({
       command: launchSnapshot.command,
       args: launchSnapshot.args,
       cwd: launchSnapshot.cwd,
-      env: launchSnapshot.prepareEnvironment(getDefaultEnvironment()),
+      env: environment,
       stderr: 'pipe',
       maxBufferSize: this.binding.limits.maxProviderResponseBytes,
     })
