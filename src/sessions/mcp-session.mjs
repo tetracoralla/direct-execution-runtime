@@ -136,7 +136,17 @@ export class McpSession {
       throw error
     } finally {
       this.#startupWaiters -= 1
-      if (abandoned && this.#starting === starting && this.#startupWaiters === 0) await this.close()
+      // The startup promise can settle in the same event-loop turn as the
+      // caller deadline. In that race its completion handler clears
+      // #starting before this finally block runs, even though the caller has
+      // already timed out. Close the just-created live client as well so an
+      // abandoned cold start cannot leave an unowned warm provider behind.
+      if (
+        abandoned && this.#startupWaiters === 0 &&
+        (this.#starting === starting || (this.#starting === undefined && this.#client !== undefined))
+      ) {
+        await this.close()
+      }
     }
     return { sessionState: 'cold' }
   }

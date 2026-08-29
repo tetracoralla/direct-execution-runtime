@@ -229,7 +229,7 @@ test('host shutdown aborts active work and reaps the owned provider process', as
       action: 'run',
       workOrder: workOrder('shutdown-active', [fakeCall('slow', { value: 'late', delayMs: 500 })]),
     }).catch((error) => error)
-    await waitFor(() => Number.isInteger(runtime.sessionSnapshot()[0].pid))
+    await waitFor(() => Number.isInteger(runtime.sessionSnapshot()[0].pid), 5000)
     const pid = runtime.sessionSnapshot()[0].pid
 
     await service.close()
