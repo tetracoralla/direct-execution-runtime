@@ -47,7 +47,11 @@ function workOrder(id, expression, extraInput = {}) {
     calls: [{
       id: 'calculation',
       providerId,
-      target: { kind: 'mcp-tool', toolName: 'math.run' },
+      target: {
+        kind: 'mcp-operation',
+        toolName: 'math.run',
+        operationId: 'expression.evaluate',
+      },
       input: {
         operation: 'expression.evaluate',
         arguments: { expression },
@@ -123,7 +127,7 @@ async function main() {
   const expectedServerVersion = await installedProviderVersion(python, projectManifest)
 
   const prepared = await prepareRuntimeConfig({
-    schemaVersion: 'openadam.direct-provider-config.v0.1',
+    schemaVersion: 'openadam.direct-provider-config.v0.2',
     limits: {
       maxConcurrentCalls: 2,
       maxQueuedCalls: 8,
@@ -147,7 +151,14 @@ async function main() {
       cwd: root,
       identityFiles: [command, serverSource, projectManifest],
       expectedServer: { name: 'Math Anchor', version: expectedServerVersion },
-      allowedTools: ['math.run'],
+      allowedTools: ['math.run', 'math.batch'],
+      operationProjections: [{
+        toolName: 'math.run',
+        operationField: 'operation',
+        argumentsField: 'arguments',
+        batchToolName: 'math.batch',
+        batchItemsField: 'items',
+      }],
     }],
   })
 

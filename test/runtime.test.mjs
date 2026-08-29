@@ -1,13 +1,21 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFile, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { prepareRuntimeConfig } from '../src/config.mjs'
 import { DirectExecutionRuntime } from '../src/runtime.mjs'
+import { JsonlObservationSink } from '../src/observations.mjs'
+import { createValidator, loadBundledSchema } from '../src/schema.mjs'
 import {
   fakeCall,
   fakeConfig,
   fakeMcpCall,
   fakeMcpConfig,
+  fakeLookupProjectedMcpConfig,
+  fakeProjectedMcpCall,
+  fakeProjectedMcpConfig,
   fakeProcedureCall,
   fakeProcedureConfig,
   workOrder,
@@ -27,14 +35,18 @@ test('ordered independent calls preserve success and provider-owned error semant
     const result = await runtime.runWorkOrder(workOrder('partial', [
       fakeCall('first', { value: 'alpha' }),
       fakeCall('second', { value: 'beta', behavior: 'provider-error' }),
+      fakeCall('legacy-error', { value: 'without-retryable', behavior: 'provider-error' }),
       fakeCall('third', { value: 'gamma' }),
     ]))
     assert.equal(result.status, 'partial')
-    assert.deepEqual(result.calls.map((call) => call.id), ['first', 'second', 'third'])
+    assert.deepEqual(result.calls.map((call) => call.id), ['first', 'second', 'legacy-error', 'third'])
     assert.equal(result.calls[0].result.value, 'alpha')
     assert.equal(result.calls[1].status, 'provider_error')
     assert.equal(result.calls[1].error.code, 'FAKE_REJECTED')
-    assert.equal(result.calls[2].result.value, 'gamma')
+    assert.equal(result.calls[1].error.retryable, false)
+    assert.equal(result.calls[2].status, 'provider_error')
+    assert.equal(result.calls[2].error.retryable, false)
+    assert.equal(result.calls[3].result.value, 'gamma')
     assert.deepEqual(result.execution, {
       mode: 'direct-host',
       modelCalls: 0,
@@ -43,6 +55,88 @@ test('ordered independent calls preserve success and provider-owned error semant
       externalCostStatus: 'not_observed',
     })
   })
+})
+
+test('metadata observation records semantic identity and costs without input or result content', async () => {
+  const directory = await mkdtemp(resolve(tmpdir(), 'direct-exec-observation-'))
+  const logPath = resolve(directory, 'observations.jsonl')
+  const runtime = new DirectExecutionRuntime(await prepareRuntimeConfig(fakeConfig()), {
+    observationSink: new JsonlObservationSink(logPath),
+  })
+  try {
+    const input = { value: 'must-not-be-stored' }
+    const result = await runtime.runWorkOrder(workOrder('private-work-order', [fakeCall('private-call', input)]))
+    assert.deepEqual(result.execution.observation, {
+      enabled: true,
+      attempted: 1,
+      written: 1,
+      failed: 0,
+      lastErrorCode: null,
+    })
+    const text = await readFile(logPath, 'utf8')
+    assert.equal(text.includes('must-not-be-stored'), false)
+    assert.equal(text.includes('private-work-order'), false)
+    assert.equal(text.includes('private-call'), false)
+    const observation = JSON.parse(text.trim())
+    const validateObservation = createValidator().compile(await loadBundledSchema('execution-observation.schema.json'))
+    assert.equal(validateObservation(observation), true, JSON.stringify(validateObservation.errors))
+    assert.equal(observation.schemaVersion, 'openadam.direct-execution-observation.v0.1')
+    assert.equal(observation.target.capabilityId, 'org.openadam.test.echo')
+    assert.equal(observation.payloadBytes.request, Buffer.byteLength(JSON.stringify(input)))
+    assert.equal(observation.execution.modelCalls, 0)
+    assert.equal(observation.execution.monetaryCost, null)
+  } finally {
+    await runtime.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('observation failure is visible but cannot change provider execution semantics', async () => {
+  const runtime = new DirectExecutionRuntime(await prepareRuntimeConfig(fakeConfig()), {
+    observationSink: { async write() { throw Object.assign(new Error('unavailable'), { code: 'TEST_SINK_FAILED' }) } },
+  })
+  try {
+    const result = await runtime.runWorkOrder(workOrder('sink-failure', [fakeCall('call', { value: 'ok' })]))
+    assert.equal(result.status, 'ok')
+    assert.equal(result.calls[0].result.value, 'ok')
+    assert.deepEqual(result.execution.observation, {
+      enabled: true,
+      attempted: 1,
+      written: 0,
+      failed: 1,
+      lastErrorCode: 'TEST_SINK_FAILED',
+    })
+  } finally {
+    await runtime.close()
+  }
+})
+
+test('observation sink rejects symlinks and reports a full bounded log without changing execution', async () => {
+  const directory = await mkdtemp(resolve(tmpdir(), 'direct-exec-observation-boundary-'))
+  try {
+    const target = resolve(directory, 'target.jsonl')
+    const link = resolve(directory, 'linked.jsonl')
+    await writeFile(target, '')
+    await symlink(target, link)
+    assert.throws(() => new JsonlObservationSink(link), { code: 'HOST_OBSERVATION_LOG_INVALID' })
+
+    const boundedPath = resolve(directory, 'bounded.jsonl')
+    await writeFile(boundedPath, 'x'.repeat(1000))
+    const runtime = new DirectExecutionRuntime(await prepareRuntimeConfig(fakeConfig()), {
+      observationSink: new JsonlObservationSink(boundedPath, { maxBytes: 1024 }),
+    })
+    try {
+      const result = await runtime.runWorkOrder(workOrder('bounded-log', [fakeCall('call', { value: 'ok' })]))
+      assert.equal(result.status, 'ok')
+      assert.equal(result.calls[0].result.value, 'ok')
+      assert.equal(result.execution.observation.failed, 1)
+      assert.equal(result.execution.observation.lastErrorCode, 'HOST_OBSERVATION_LOG_FULL')
+    } finally {
+      await runtime.close()
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
 })
 
 test('a structured Procedure call runs directly and preserves provider-owned errors', async () => {
@@ -59,6 +153,170 @@ test('a structured Procedure call runs directly and preserves provider-owned err
     assert.equal(result.calls[1].status, 'provider_error')
     assert.equal(result.calls[1].error.code, 'FAKE_REJECTED')
     assert.equal(result.calls[1].error.retryable, false)
+  })
+})
+
+test('selected MCP operations project and compile only their own live contract', async () => {
+  await withRuntime(fakeProjectedMcpConfig({ limits: { defaultTimeoutMs: 10000 } }), async (runtime) => {
+    const target = { kind: 'mcp-operation', toolName: 'dispatch', operationId: 'text.upper' }
+    const projected = await runtime.projectContract({
+      schemaVersion: 'openadam.direct-contract-selection.v0.1',
+      providerId: 'test.fake-mcp',
+      target,
+    })
+    assert.equal(projected.target.operationId, 'text.upper')
+    assert.equal(projected.provider.version, '0.1.0')
+    assert.equal(projected.contract.contractSource, 'live-session')
+    assert.equal(projected.contract.inputSchema.oneOf.length, 1)
+    assert.equal(
+      projected.contract.inputSchema.oneOf[0].properties.operation.const,
+      'text.upper',
+    )
+    assert.equal(JSON.stringify(projected).includes('text.echo'), false)
+    assert.match(projected.contract.contractDigest, /^sha256:[a-f0-9]{64}$/)
+
+    const afterProjection = await runtime.inspectBindings()
+    assert.equal(afterProjection.providers[0].live.projectedOperationContracts, 1)
+    const result = await runtime.runWorkOrder(workOrder('projected-operation', [
+      fakeProjectedMcpCall('upper', 'text.upper', { value: 'mixed' }),
+    ]))
+    assert.equal(result.calls[0].result.value, 'MIXED')
+    assert.equal(result.calls[0].target.operationId, 'text.upper')
+    assert.equal(result.calls[0].binding.contractDigest, projected.contract.contractDigest)
+
+    const invalid = await runtime.runWorkOrder(workOrder('projected-invalid', [
+      fakeProjectedMcpCall('bad', 'text.upper', { value: 'x', extra: true }),
+    ]))
+    assert.equal(invalid.calls[0].error.code, 'HOST_INPUT_INVALID')
+
+    const mismatched = fakeProjectedMcpCall('mismatch', 'text.upper', { value: 'x' })
+    mismatched.input.operation = 'text.echo'
+    const mismatchResult = await runtime.runWorkOrder(workOrder('projected-mismatch', [mismatched]))
+    assert.equal(mismatchResult.calls[0].error.code, 'HOST_BINDING_MISMATCH')
+  })
+})
+
+test('MCP live catalog acquisition follows pagination before binding allowed tools', async () => {
+  const config = fakeMcpConfig({ args: ['--paginate-tools'] })
+  config.providers[0].allowedTools = ['dispatch.compact']
+  await withRuntime(config, async (runtime) => {
+    const call = {
+      id: 'page-two-tool',
+      providerId: 'test.fake-mcp',
+      target: { kind: 'mcp-tool', toolName: 'dispatch.compact' },
+      input: { operation: 'text.echo', arguments: { value: 'page-two' } },
+    }
+    const result = await runtime.runWorkOrder(workOrder('paginated-catalog', [call]))
+    assert.equal(result.calls[0].status, 'ok')
+    assert.equal(result.calls[0].result.value, 'page-two')
+    assert.equal(result.calls[0].session, 'cold')
+    const observation = runtime.sessionSnapshot()[0]
+    assert.equal(observation.generation, 1)
+    assert.equal(observation.live.catalogBytes > 0, true)
+    assert.deepEqual(observation.live.tools, ['dispatch.compact'])
+  })
+})
+
+test('MCP catalog pagination that never advances fails closed without a binding', async () => {
+  const config = fakeMcpConfig({ args: ['--paginate-forever'] })
+  config.providers[0].allowedTools = ['dispatch.batch']
+  await withRuntime(config, async (runtime) => {
+    const call = {
+      id: 'spinning-catalog',
+      providerId: 'test.fake-mcp',
+      target: { kind: 'mcp-tool', toolName: 'dispatch.batch' },
+      input: { items: [{ operation: 'text.echo', arguments: { value: 'x' } }] },
+    }
+    const result = await runtime.runWorkOrder(workOrder('spinning-catalog', [call]))
+    assert.equal(result.calls[0].status, 'host_error')
+    assert.equal(result.calls[0].error.code, 'HOST_BINDING_INVALID')
+    assert.match(result.calls[0].error.message, /pagination did not advance/u)
+    const observation = runtime.sessionSnapshot()[0]
+    assert.equal(observation.pid, null)
+    assert.deepEqual(observation.live.tools, [])
+  })
+})
+
+test('compact MCP operations acquire one selected schema through a declared live lookup tool', async () => {
+  await withRuntime(fakeLookupProjectedMcpConfig({ limits: { defaultTimeoutMs: 10000 } }), async (runtime) => {
+    const target = { kind: 'mcp-operation', toolName: 'dispatch.compact', operationId: 'text.upper' }
+    const projected = await runtime.projectContract({
+      schemaVersion: 'openadam.direct-contract-selection.v0.1',
+      providerId: 'test.fake-mcp',
+      target,
+    })
+    assert.equal(projected.contract.inputSchema.properties.operation.const, 'text.upper')
+    assert.deepEqual(projected.contract.inputSchema.properties.arguments.required, ['value'])
+    assert.equal(projected.contract.inputSchema.properties.arguments.additionalProperties, false)
+    assert.equal(JSON.stringify(projected).includes('text.echo'), false)
+
+    const validCall = fakeProjectedMcpCall('upper', 'text.upper', { value: 'mixed' })
+    validCall.target.toolName = 'dispatch.compact'
+    const valid = await runtime.runWorkOrder(workOrder('lookup-projected-operation', [validCall]))
+    assert.equal(valid.calls[0].result.value, 'MIXED')
+
+    const invalidCall = fakeProjectedMcpCall('invalid', 'text.upper', { value: 'x', extra: true })
+    invalidCall.target.toolName = 'dispatch.compact'
+    const invalid = await runtime.runWorkOrder(workOrder('lookup-projected-invalid', [invalidCall]))
+    assert.equal(invalid.calls[0].error.code, 'HOST_INPUT_INVALID')
+  })
+})
+
+test('compact MCP projection rejects a malformed live schema lookup response', async () => {
+  await withRuntime(fakeLookupProjectedMcpConfig({ args: ['--malformed-lookup'] }), async (runtime) => {
+    const target = { kind: 'mcp-operation', toolName: 'dispatch.compact', operationId: 'text.upper' }
+    await assert.rejects(
+      () => runtime.projectContract({
+        schemaVersion: 'openadam.direct-contract-selection.v0.1',
+        providerId: 'test.fake-mcp',
+        target,
+      }),
+      (error) => error.code === 'HOST_PROVIDER_OUTPUT_INVALID',
+    )
+  })
+})
+
+test('compact MCP native batch validates every item through acquired operation schemas', async () => {
+  await withRuntime(fakeLookupProjectedMcpConfig(), async (runtime) => {
+    const batchCall = {
+      id: 'batch',
+      providerId: 'test.fake-mcp',
+      target: { kind: 'mcp-tool', toolName: 'dispatch.batch' },
+      input: {
+        items: [
+          { operation: 'text.echo', arguments: { value: 'one' } },
+          { operation: 'text.upper', arguments: { value: 'two' } },
+        ],
+      },
+    }
+    const result = await runtime.runWorkOrder(workOrder('lookup-native-batch', [batchCall]))
+    assert.deepEqual(result.calls[0].result.results, [{ value: 'one' }, { value: 'TWO' }])
+    batchCall.input.items[1].arguments.extra = true
+    const invalid = await runtime.runWorkOrder(workOrder('lookup-native-batch-invalid', [batchCall]))
+    assert.equal(invalid.calls[0].error.code, 'HOST_INPUT_INVALID')
+  })
+})
+
+test('declared MCP native batch validates every item against its selected operation contract', async () => {
+  await withRuntime(fakeProjectedMcpConfig(), async (runtime) => {
+    const batchCall = {
+      id: 'batch',
+      providerId: 'test.fake-mcp',
+      target: { kind: 'mcp-tool', toolName: 'dispatch.batch' },
+      input: {
+        items: [
+          { operation: 'text.echo', arguments: { value: 'one' } },
+          { operation: 'text.upper', arguments: { value: 'two' } },
+        ],
+      },
+    }
+    const result = await runtime.runWorkOrder(workOrder('native-batch', [batchCall]))
+    assert.equal(result.calls[0].status, 'ok')
+    assert.deepEqual(result.calls[0].result.results, [{ value: 'one' }, { value: 'TWO' }])
+
+    batchCall.input.items[1].arguments.extra = true
+    const invalid = await runtime.runWorkOrder(workOrder('native-batch-invalid', [batchCall]))
+    assert.equal(invalid.calls[0].error.code, 'HOST_INPUT_INVALID')
   })
 })
 
@@ -174,6 +432,10 @@ test('running cancellation replaces the JSONL session and releases admission', a
 
 test('one JSONL timeout reports collateral calls as session replacement, not false cancellation', async () => {
   await withRuntime(fakeConfig({ limits: { maxConcurrentCalls: 2 } }), async (runtime) => {
+    const warmed = await runtime.runWorkOrder(workOrder('collateral-warmup', [
+      fakeCall('warmup', { value: 'ready' }),
+    ]))
+    assert.equal(warmed.calls[0].status, 'ok')
     const result = await runtime.runWorkOrder(workOrder('collateral-replacement', [
       fakeCall('timed-out', { value: 'late', delayMs: 100 }, 10),
       fakeCall('collateral', { value: 'also-late', delayMs: 100 }, 1000),
@@ -248,6 +510,69 @@ test('cold MCP startup deadline terminates the child before a later cold recover
     assert.equal(recovered.calls[0].result.value, 'ready')
     assert.match(recovered.calls[0].binding.contractDigest, /^sha256:[a-f0-9]{64}$/)
     assert.equal(recovered.calls[0].binding.contractSource, 'live-session')
+  })
+})
+
+test('one cancelled waiter does not poison a shared persistent MCP startup', async () => {
+  const config = fakeMcpConfig({
+    args: ['--startup-delay=250'],
+    limits: { defaultTimeoutMs: 10000, maxConcurrentCalls: 2 },
+  })
+  await withRuntime(config, async (runtime) => {
+    const controller = new AbortController()
+    const survivor = runtime.runWorkOrder(workOrder('mcp-shared-startup-survivor', [
+      fakeMcpCall('survivor', { value: 'ready' }),
+    ]))
+    const cancelled = runtime.runWorkOrder(workOrder('mcp-shared-startup-cancelled', [
+      fakeMcpCall('cancelled', { value: 'must-not-run' }),
+    ]), { signal: controller.signal })
+
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (runtime.admissionSnapshot().active === 2 && Number.isInteger(runtime.sessionSnapshot()[0].pid)) break
+      await delay(2)
+    }
+    assert.equal(runtime.admissionSnapshot().active, 2)
+    assert.ok(Number.isInteger(runtime.sessionSnapshot()[0].pid))
+    controller.abort()
+
+    const [survived, stopped] = await Promise.all([survivor, cancelled])
+    assert.equal(stopped.calls[0].error.code, 'HOST_CANCELLED')
+    assert.equal(survived.calls[0].status, 'ok')
+    assert.equal(survived.calls[0].result.value, 'ready')
+    assert.notEqual(survived.calls[0].error?.code, 'HOST_PROVIDER_UNAVAILABLE')
+    assert.equal(runtime.sessionSnapshot()[0].generation, 1)
+  })
+})
+
+test('explicit replacement during shared MCP startup is stable, retryable, and recoverable', async () => {
+  const config = fakeMcpConfig({
+    args: ['--startup-delay=250'],
+    limits: { defaultTimeoutMs: 10000, maxConcurrentCalls: 2 },
+  })
+  await withRuntime(config, async (runtime) => {
+    const interrupted = runtime.runWorkOrder(workOrder('mcp-shared-startup-replaced', [
+      fakeMcpCall('first', { value: 'first' }),
+      fakeMcpCall('second', { value: 'second' }),
+    ]))
+
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (runtime.admissionSnapshot().active === 2 && Number.isInteger(runtime.sessionSnapshot()[0].pid)) break
+      await delay(2)
+    }
+    assert.equal(runtime.admissionSnapshot().active, 2)
+    assert.ok(Number.isInteger(runtime.sessionSnapshot()[0].pid))
+    await runtime.replaceProvider('test.fake-mcp')
+
+    const replaced = await interrupted
+    assert.equal(replaced.calls.every((call) => call.error.code === 'HOST_PROVIDER_REPLACED'), true)
+    assert.equal(replaced.calls.every((call) => call.error.retryable === true), true)
+    assert.equal(runtime.sessionSnapshot()[0].pid, null)
+
+    const recovered = await runtime.runWorkOrder(workOrder('mcp-shared-startup-replacement-recovery', [
+      fakeMcpCall('recovered', { value: 'ready' }),
+    ]))
+    assert.equal(recovered.calls[0].status, 'ok')
+    assert.equal(recovered.calls[0].session, 'cold')
   })
 })
 

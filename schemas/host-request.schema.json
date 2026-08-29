@@ -15,6 +15,17 @@
     {
       "type": "object",
       "additionalProperties": false,
+      "required": ["schemaVersion", "id", "action", "selection"],
+      "properties": {
+        "schemaVersion": { "const": "openadam.direct-host-request.v0.1" },
+        "id": { "$ref": "#/$defs/id" },
+        "action": { "const": "project" },
+        "selection": { "$ref": "urn:openadam:direct-contract-selection:v0.1" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
       "required": ["schemaVersion", "id", "action", "workOrder"],
       "properties": {
         "schemaVersion": { "const": "openadam.direct-host-request.v0.1" },

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "openadam.direct-provider-config.v0.1",
+  "schemaVersion": "openadam.direct-provider-config.v0.2",
   "limits": {
     "maxConcurrentCalls": 4,
     "maxQueuedCalls": 32,
@@ -19,6 +19,7 @@
       "transport": "capability-jsonl-v0.1",
       "lifecycle": "persistent",
       "rootPath": "/opt/provider/root",
+      "profilePath": "/opt/shared-profiles/example-capability.v1.json",
       "manifestPath": "/opt/provider/root/capabilities/provider.json",
       "identityFiles": [
         "/opt/provider/root/bin/capability-adapter"
@@ -45,7 +46,19 @@
         "/opt/provider/root/bin/provider-mcp"
       ],
       "expectedServer": { "name": "Example Provider", "version": "1.0.0" },
-      "allowedTools": ["domain.run"]
+      "allowedTools": ["domain.run", "domain.batch", "domain.describe"],
+      "operationProjections": [{
+        "toolName": "domain.run",
+        "operationField": "operation",
+        "argumentsField": "arguments",
+        "batchToolName": "domain.batch",
+        "batchItemsField": "items",
+        "schemaLookup": {
+          "toolName": "domain.describe",
+          "operationField": "operation",
+          "resultPath": ["operation", "inputSchema"]
+        }
+      }]
     },
     {
       "providerId": "example.procedure-provider",

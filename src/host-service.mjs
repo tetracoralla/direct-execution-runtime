@@ -1,15 +1,22 @@
 import { chmod, lstat, realpath, stat, unlink } from 'node:fs/promises'
 import { connect, createServer } from 'node:net'
+import { platform } from 'node:os'
 import { basename, dirname, isAbsolute, resolve } from 'node:path'
 import { HostError } from './errors.mjs'
 import { assertHostRequest, hostFailure, hostSuccess, HOST_SERVICE_VERSION } from './host-protocol.mjs'
-import { jsonBytes, parseStrictJson } from './json.mjs'
+import { decodeUtf8Strict, jsonBytes, parseStrictJson } from './json.mjs'
 
 const ENVELOPE_ALLOWANCE_BYTES = 64 * 1024
 const DEFAULT_REQUEST_RECEIVE_TIMEOUT_MS = 30_000
+const SOCKET_VISIBILITY_ATTEMPTS = 100
+const SOCKET_VISIBILITY_DELAY_MS = 5
+const UNIX_SOCKET_PATH_MAX_BYTES = platform() === 'darwin' ? 103 : 107
 
 async function secureSocketPath(path) {
   if (!isAbsolute(path)) throw new HostError('HOST_CONFIG_INVALID', 'Host socket path must be absolute')
+  if (Buffer.byteLength(path) > UNIX_SOCKET_PATH_MAX_BYTES) {
+    throw new HostError('HOST_CONFIG_INVALID', `Host socket path exceeds the ${UNIX_SOCKET_PATH_MAX_BYTES}-byte platform limit`)
+  }
   const name = basename(path)
   if (name.length === 0 || name === '.' || name === '..') {
     throw new HostError('HOST_CONFIG_INVALID', 'Host socket path must name a socket file')
@@ -17,6 +24,10 @@ async function secureSocketPath(path) {
   const parent = await realpath(dirname(path)).catch((error) => {
     throw new HostError('HOST_CONFIG_INVALID', 'Host socket directory does not exist', { cause: error })
   })
+  const canonicalPath = resolve(parent, name)
+  if (Buffer.byteLength(canonicalPath) > UNIX_SOCKET_PATH_MAX_BYTES) {
+    throw new HostError('HOST_CONFIG_INVALID', `Canonical host socket path exceeds the ${UNIX_SOCKET_PATH_MAX_BYTES}-byte platform limit`)
+  }
   const parentInfo = await stat(parent)
   if (!parentInfo.isDirectory()) throw new HostError('HOST_CONFIG_INVALID', 'Host socket parent is not a directory')
   if (typeof process.getuid === 'function' && parentInfo.uid !== process.getuid()) {
@@ -25,7 +36,7 @@ async function secureSocketPath(path) {
   if ((parentInfo.mode & 0o077) !== 0) {
     throw new HostError('HOST_CONFIG_INVALID', 'Host socket directory must not be accessible by group or other users')
   }
-  return resolve(parent, name)
+  return canonicalPath
 }
 
 async function liveSocket(path) {
@@ -66,6 +77,22 @@ function sameFile(left, right) {
   return left !== undefined && right !== undefined && left.dev === right.dev && left.ino === right.ino
 }
 
+export async function waitForSocketIdentity(path, dependencies = {}) {
+  const inspect = dependencies.lstat ?? lstat
+  const delay = dependencies.delay ?? ((duration) => new Promise((resolvePromise) => setTimeout(resolvePromise, duration)))
+  for (let attempt = 0; attempt < SOCKET_VISIBILITY_ATTEMPTS; attempt += 1) {
+    try {
+      const identity = await inspect(path)
+      if (!identity.isSocket()) throw new HostError('HOST_SERVICE_UNAVAILABLE', 'Host service listener did not create a Unix Socket')
+      return identity
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+      if (attempt + 1 < SOCKET_VISIBILITY_ATTEMPTS) await delay(SOCKET_VISIBILITY_DELAY_MS)
+    }
+  }
+  throw new HostError('HOST_SERVICE_UNAVAILABLE', 'Host service Socket did not become visible after listening')
+}
+
 export class DirectHostService {
   #server
   #socketIdentity
@@ -93,7 +120,7 @@ export class DirectHostService {
     if (this.#server !== undefined) throw new HostError('HOST_SERVICE_IN_USE', 'Host service is already started')
     this.socketPath = await secureSocketPath(this.requestedSocketPath)
     await prepareSocket(this.socketPath, this.replaceStaleSocket)
-    const server = createServer((socket) => this.#accept(socket))
+    const server = createServer({ allowHalfOpen: true }, (socket) => this.#accept(socket))
     server.maxConnections = this.maxConnections
     this.#server = server
     try {
@@ -114,8 +141,13 @@ export class DirectHostService {
         server.once('listening', onListening)
         server.listen(this.socketPath)
       })
+      const createdIdentity = await waitForSocketIdentity(this.socketPath)
       await chmod(this.socketPath, 0o600)
-      this.#socketIdentity = await lstat(this.socketPath)
+      const securedIdentity = await lstat(this.socketPath)
+      if (!securedIdentity.isSocket() || !sameFile(createdIdentity, securedIdentity)) {
+        throw new HostError('HOST_SERVICE_UNAVAILABLE', 'Host service Socket identity changed while securing it')
+      }
+      this.#socketIdentity = securedIdentity
     } catch (error) {
       this.#server = undefined
       await new Promise((resolvePromise) => server.close(() => resolvePromise())).catch(() => {})
@@ -160,8 +192,17 @@ export class DirectHostService {
       if (!processing && !responded) fail(new HostError('HOST_TIMEOUT', 'Host service did not receive a complete request before its deadline'))
     })
 
+    // A complete newline-terminated request line starts processing immediately,
+    // before any client EOF. This keeps one framing across clients that
+    // half-close after the request and clients that keep the write side open
+    // while waiting for the response (installed 0.1.x clients).
     socket.on('data', (chunk) => {
       if (responded) return
+      buffer = Buffer.concat([buffer, chunk])
+      if (buffer.length > this.requestLimit) {
+        fail(new HostError('HOST_INPUT_TOO_LARGE', 'Host service request exceeds its complete envelope limit'))
+        return
+      }
       if (processing) {
         if (chunk.toString('utf8').trim().length !== 0) {
           controller?.abort()
@@ -169,31 +210,36 @@ export class DirectHostService {
         }
         return
       }
-      buffer = Buffer.concat([buffer, chunk])
-      if (buffer.length > this.requestLimit) {
-        fail(new HostError('HOST_INPUT_TOO_LARGE', 'Host service request exceeds its complete envelope limit'))
-        return
-      }
       const newline = buffer.indexOf(0x0a)
       if (newline === -1) return
       processing = true
       socket.setTimeout(0)
-      const trailing = buffer.subarray(newline + 1).toString('utf8').trim()
-      if (trailing.length !== 0) {
-        fail(new HostError('HOST_PROTOCOL_ERROR', 'Host service accepts exactly one request per connection'))
+      try {
+        if (newline !== buffer.length - 1) {
+          decodeUtf8Strict(buffer.subarray(newline + 1), 'host request trailing bytes')
+          fail(new HostError('HOST_PROTOCOL_ERROR', 'Host service accepts exactly one request per connection'))
+          return
+        }
+      } catch (error) {
+        fail(error)
         return
       }
       void (async () => {
         try {
-          const request = parseStrictJson(buffer.subarray(0, newline).toString('utf8'), 'host request')
+          const request = parseStrictJson(
+            decodeUtf8Strict(buffer.subarray(0, newline), 'host request'),
+            'host request',
+          )
           if (typeof request?.id === 'string') requestId = request.id
           assertHostRequest(request, this.requestLimit)
           controller = new AbortController()
           this.#controllers.add(controller)
           const result = request.action === 'inspect'
-            ? await this.runtime.inspectBindings()
+            ? await this.runtime.inspectBindings({ signal: controller.signal })
+            : request.action === 'project'
+              ? await this.runtime.projectContract(request.selection, { signal: controller.signal })
             : request.action === 'validate'
-              ? await this.runtime.validateWorkOrder(request.workOrder)
+              ? await this.runtime.validateWorkOrder(request.workOrder, { signal: controller.signal })
               : await this.runtime.runWorkOrder(request.workOrder, { signal: controller.signal })
           respond(hostSuccess(request.id, result))
         } catch (error) {
@@ -202,6 +248,10 @@ export class DirectHostService {
           if (controller !== undefined) this.#controllers.delete(controller)
         }
       })()
+    })
+    socket.once('end', () => {
+      if (responded || processing) return
+      fail(new HostError('HOST_PROTOCOL_ERROR', 'Host service request ended without one complete JSON line'))
     })
     socket.once('close', () => {
       if (!responded) controller?.abort()

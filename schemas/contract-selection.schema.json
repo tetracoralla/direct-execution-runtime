@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:openadam:direct-contract-selection:v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "providerId", "target"],
+  "properties": {
+    "schemaVersion": { "const": "openadam.direct-contract-selection.v0.1" },
+    "providerId": { "$ref": "#/$defs/id" },
+    "target": {
+      "oneOf": [
+        { "$ref": "#/$defs/capabilityTarget" },
+        { "$ref": "#/$defs/procedureTarget" },
+        { "$ref": "#/$defs/mcpTarget" },
+        { "$ref": "#/$defs/mcpOperationTarget" }
+      ]
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+    },
+    "capabilityTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "capabilityId", "capabilityVersion", "operationId"],
+      "properties": {
+        "kind": { "const": "capability" },
+        "capabilityId": { "$ref": "#/$defs/id" },
+        "capabilityVersion": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "operationId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "procedureTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "procedureId", "procedureVersion"],
+      "properties": {
+        "kind": { "const": "procedure" },
+        "procedureId": { "$ref": "#/$defs/id" },
+        "procedureVersion": { "type": "string", "minLength": 1, "maxLength": 100 }
+      }
+    },
+    "mcpTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "toolName"],
+      "properties": {
+        "kind": { "const": "mcp-tool" },
+        "toolName": { "$ref": "#/$defs/id" }
+      }
+    },
+    "mcpOperationTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "toolName", "operationId"],
+      "properties": {
+        "kind": { "const": "mcp-operation" },
+        "toolName": { "$ref": "#/$defs/id" },
+        "operationId": { "$ref": "#/$defs/id" }
+      }
+    }
+  }
+}

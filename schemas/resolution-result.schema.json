@@ -1,0 +1,576 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:openadam:direct-resolution-result:v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "resolvedAt", "freshness", "request", "status", "summary", "candidates", "reasonCodes"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "openadam.direct-resolution-result.v0.1" },
+    "resolvedAt": { "type": "string", "format": "date-time" },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "observedAt", "expiresAt", "reuseRequiresRevalidation"],
+      "properties": {
+        "kind": { "const": "point-in-time" },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "null" },
+        "reuseRequiresRevalidation": { "const": true }
+      }
+    },
+    "request": { "$ref": "urn:openadam:direct-resolution-request:v0.1" },
+    "status": { "$ref": "#/$defs/status" },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configuredProviders", "configuredMatches", "exactCandidates", "eligible", "ineligible", "unknown"
+      ],
+      "properties": {
+        "configuredProviders": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "configuredMatches": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "exactCandidates": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "eligible": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "ineligible": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "unknown": { "type": "integer", "minimum": 0, "maximum": 64 }
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/candidate" }
+    },
+    "reasonCodes": { "$ref": "#/$defs/reasonCodes" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "request": {
+            "properties": {
+              "constraints": { "required": ["requiredContractDigest"] }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "properties": {
+                "checks": {
+                  "properties": {
+                    "requiredContractDigest": { "enum": ["satisfied", "failed", "not_observed"] }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "properties": {
+                "checks": {
+                  "properties": { "requiredContractDigest": { "const": "not_requested" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "request": {
+            "properties": {
+              "constraints": { "required": ["maxContractSchemaBytes"] }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "properties": {
+                "checks": {
+                  "properties": {
+                    "maxContractSchemaBytes": { "enum": ["satisfied", "failed", "not_observed"] }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "properties": {
+                "checks": {
+                  "properties": { "maxContractSchemaBytes": { "const": "not_requested" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "eligible_for_this_request" } }
+      },
+      "then": {
+        "properties": {
+          "summary": {
+            "properties": { "eligible": { "minimum": 1 } }
+          },
+          "candidates": {
+            "contains": {
+              "properties": { "status": { "const": "eligible_for_this_request" } },
+              "required": ["status"]
+            },
+            "minContains": 1
+          },
+          "reasonCodes": { "maxItems": 0 }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "unknown" } }
+      },
+      "then": {
+        "properties": {
+          "summary": {
+            "properties": {
+              "eligible": { "const": 0 },
+              "unknown": { "minimum": 1 }
+            }
+          },
+          "candidates": {
+            "contains": {
+              "properties": { "status": { "const": "unknown" } },
+              "required": ["status"]
+            },
+            "minContains": 1,
+            "not": {
+              "contains": {
+                "properties": { "status": { "const": "eligible_for_this_request" } },
+                "required": ["status"]
+              }
+            }
+          },
+          "reasonCodes": { "maxItems": 0 }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "ineligible" } }
+      },
+      "then": {
+        "properties": {
+          "summary": {
+            "properties": {
+              "eligible": { "const": 0 },
+              "unknown": { "const": 0 }
+            }
+          },
+          "candidates": {
+            "items": {
+              "properties": { "status": { "const": "ineligible" } }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "candidates": { "maxItems": 0 } }
+      },
+      "then": {
+        "properties": {
+          "status": { "const": "ineligible" },
+          "summary": {
+            "properties": {
+              "exactCandidates": { "const": 0 },
+              "eligible": { "const": 0 },
+              "ineligible": { "const": 0 },
+              "unknown": { "const": 0 }
+            }
+          },
+          "reasonCodes": {
+            "prefixItems": [{ "const": "NO_EXACT_BINDING" }],
+            "minItems": 1,
+            "maxItems": 1
+          }
+        }
+      },
+      "else": {
+        "properties": { "reasonCodes": { "maxItems": 0 } }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "status": {
+      "enum": ["eligible_for_this_request", "ineligible", "unknown"]
+    },
+    "reasonCodes": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,99}$" }
+    },
+    "target": {
+      "oneOf": [
+        { "$ref": "#/$defs/capabilityTarget" },
+        { "$ref": "#/$defs/procedureTarget" },
+        { "$ref": "#/$defs/mcpTarget" },
+        { "$ref": "#/$defs/mcpOperationTarget" }
+      ]
+    },
+    "capabilityTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "capabilityId", "capabilityVersion", "operationId"],
+      "properties": {
+        "kind": { "const": "capability" },
+        "capabilityId": { "$ref": "#/$defs/id" },
+        "capabilityVersion": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "operationId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "procedureTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "procedureId", "procedureVersion"],
+      "properties": {
+        "kind": { "const": "procedure" },
+        "procedureId": { "$ref": "#/$defs/id" },
+        "procedureVersion": { "type": "string", "minLength": 1, "maxLength": 100 }
+      }
+    },
+    "mcpTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "toolName"],
+      "properties": {
+        "kind": { "const": "mcp-tool" },
+        "toolName": { "$ref": "#/$defs/id" }
+      }
+    },
+    "mcpOperationTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "toolName", "operationId"],
+      "properties": {
+        "kind": { "const": "mcp-operation" },
+        "toolName": { "$ref": "#/$defs/id" },
+        "operationId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "providerId", "target"],
+      "properties": {
+        "schemaVersion": { "const": "openadam.direct-contract-selection.v0.1" },
+        "providerId": { "$ref": "#/$defs/id" },
+        "target": { "$ref": "#/$defs/target" }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "transport", "lifecycle"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "transport": { "enum": ["capability-jsonl-v0.1", "procedure-jsonl-v0.2", "mcp-stdio"] },
+        "lifecycle": { "enum": ["persistent", "per-call"] }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "semanticIdentity", "projectionEnvelopeMatch", "effectAllowance", "dataLocality",
+        "requiredContractDigest", "maxContractSchemaBytes"
+      ],
+      "properties": {
+        "semanticIdentity": { "enum": ["satisfied", "not_observed"] },
+        "projectionEnvelopeMatch": { "enum": ["satisfied", "not_applicable"] },
+        "effectAllowance": { "enum": ["satisfied", "not_observed"] },
+        "dataLocality": { "const": "satisfied" },
+        "requiredContractDigest": { "enum": ["not_requested", "satisfied", "failed", "not_observed"] },
+        "maxContractSchemaBytes": { "enum": ["not_requested", "satisfied", "failed", "not_observed"] }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,99}$" },
+        "message": { "type": "string", "minLength": 1, "maxLength": 1003 },
+        "retryable": { "type": "boolean" },
+        "details": {}
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observedAt", "projectionStatus", "bindingDigest", "contractSource", "contractDigest",
+        "contractSchemaBytes", "executionAvailability", "targetOperationInvoked", "error"
+      ],
+      "properties": {
+        "observedAt": { "type": "string", "format": "date-time" },
+        "projectionStatus": { "enum": ["observed", "failed"] },
+        "bindingDigest": { "$ref": "#/$defs/digest" },
+        "contractSource": {
+          "oneOf": [
+            { "enum": ["configured-files", "live-session"] },
+            { "type": "null" }
+          ]
+        },
+        "contractDigest": {
+          "oneOf": [
+            { "$ref": "#/$defs/digest" },
+            { "type": "null" }
+          ]
+        },
+        "contractSchemaBytes": {
+          "oneOf": [
+            { "type": "integer", "minimum": 0, "maximum": 33554432 },
+            { "type": "null" }
+          ]
+        },
+        "executionAvailability": {
+          "enum": ["not_observed", "contract_session_observed", "unknown"]
+        },
+        "targetOperationInvoked": { "const": false },
+        "error": {
+          "oneOf": [
+            { "$ref": "#/$defs/error" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "target", "selection", "status", "checks", "observation", "reasonCodes"],
+      "properties": {
+        "provider": { "$ref": "#/$defs/provider" },
+        "target": { "$ref": "#/$defs/target" },
+        "selection": { "$ref": "#/$defs/selection" },
+        "status": { "$ref": "#/$defs/status" },
+        "checks": { "$ref": "#/$defs/checks" },
+        "observation": { "$ref": "#/$defs/observation" },
+        "reasonCodes": { "$ref": "#/$defs/reasonCodes" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "target": {
+                "properties": { "kind": { "const": "mcp-operation" } },
+                "required": ["kind"]
+              }
+            },
+            "required": ["target"]
+          },
+          "then": {
+            "properties": {
+              "checks": {
+                "properties": { "projectionEnvelopeMatch": { "const": "satisfied" } }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "checks": {
+                "properties": {
+                  "semanticIdentity": { "const": "satisfied" },
+                  "projectionEnvelopeMatch": { "const": "not_applicable" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "status": { "const": "eligible_for_this_request" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "checks": {
+                "properties": {
+                  "semanticIdentity": { "const": "satisfied" },
+                  "effectAllowance": { "const": "satisfied" },
+                  "requiredContractDigest": { "enum": ["not_requested", "satisfied"] },
+                  "maxContractSchemaBytes": { "enum": ["not_requested", "satisfied"] }
+                }
+              },
+              "observation": {
+                "properties": {
+                  "projectionStatus": { "const": "observed" },
+                  "contractSource": { "enum": ["configured-files", "live-session"] },
+                  "contractDigest": { "$ref": "#/$defs/digest" },
+                  "contractSchemaBytes": { "type": "integer", "minimum": 0, "maximum": 33554432 },
+                  "error": { "type": "null" }
+                }
+              },
+              "reasonCodes": { "maxItems": 0 }
+            }
+          },
+          "else": {
+            "properties": { "reasonCodes": { "minItems": 1 } }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "observation": {
+                "properties": { "projectionStatus": { "const": "observed" } }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "checks": {
+                "properties": {
+                  "semanticIdentity": { "const": "satisfied" },
+                  "effectAllowance": { "const": "satisfied" },
+                  "requiredContractDigest": { "enum": ["not_requested", "satisfied", "failed"] },
+                  "maxContractSchemaBytes": { "enum": ["not_requested", "satisfied", "failed"] }
+                }
+              },
+              "observation": {
+                "properties": {
+                  "contractSource": { "enum": ["configured-files", "live-session"] },
+                  "contractDigest": { "$ref": "#/$defs/digest" },
+                  "contractSchemaBytes": { "type": "integer", "minimum": 0, "maximum": 33554432 },
+                  "error": { "type": "null" }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "status": { "enum": ["ineligible", "unknown"] },
+              "checks": {
+                "properties": {
+                  "effectAllowance": { "const": "not_observed" },
+                  "requiredContractDigest": { "enum": ["not_requested", "not_observed"] },
+                  "maxContractSchemaBytes": { "enum": ["not_requested", "not_observed"] }
+                }
+              },
+              "observation": {
+                "properties": {
+                  "contractSource": { "type": "null" },
+                  "contractDigest": { "type": "null" },
+                  "contractSchemaBytes": { "type": "null" },
+                  "executionAvailability": { "const": "unknown" },
+                  "error": { "$ref": "#/$defs/error" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "target": {
+                "properties": { "kind": { "const": "mcp-operation" } }
+              },
+              "observation": {
+                "properties": { "projectionStatus": { "const": "failed" } }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "checks": {
+                "properties": { "semanticIdentity": { "const": "not_observed" } }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "status": { "const": "unknown" } }
+          },
+          "then": {
+            "properties": {
+              "observation": {
+                "properties": { "projectionStatus": { "const": "failed" } }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "provider": {
+                "properties": { "transport": { "const": "mcp-stdio" } }
+              },
+              "observation": {
+                "properties": { "projectionStatus": { "const": "observed" } }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "observation": {
+                "properties": { "contractSource": { "const": "live-session" } }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "provider": {
+                "properties": {
+                  "transport": { "enum": ["capability-jsonl-v0.1", "procedure-jsonl-v0.2"] }
+                }
+              },
+              "observation": {
+                "properties": { "projectionStatus": { "const": "observed" } }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "observation": {
+                "properties": { "contractSource": { "const": "configured-files" } }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

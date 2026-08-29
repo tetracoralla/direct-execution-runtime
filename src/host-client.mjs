@@ -3,7 +3,7 @@ import { createConnection } from 'node:net'
 import { isAbsolute } from 'node:path'
 import { HostError } from './errors.mjs'
 import { assertHostRequest, assertHostResponse, HOST_REQUEST_VERSION } from './host-protocol.mjs'
-import { parseStrictJson } from './json.mjs'
+import { decodeUtf8Strict, parseStrictJson, snapshotJsonValue } from './json.mjs'
 
 export const MAX_HOST_CLIENT_REQUEST_BYTES = 16 * 1024 * 1024 + 64 * 1024
 export const MAX_HOST_CLIENT_RESPONSE_BYTES = 32 * 1024 * 1024 + 64 * 1024
@@ -19,6 +19,7 @@ export async function requestDirectHost({
   socketPath,
   action,
   workOrder,
+  selection,
   signal,
   timeoutMs = 305_000,
   maxResponseBytes = MAX_HOST_CLIENT_RESPONSE_BYTES,
@@ -32,14 +33,22 @@ export async function requestDirectHost({
     schemaVersion: HOST_REQUEST_VERSION,
     id,
     action,
-    ...(action === 'inspect' ? {} : { workOrder }),
+    ...(action === 'inspect' ? {} : action === 'project' ? { selection } : { workOrder }),
   }
-  assertHostRequest(request, MAX_HOST_CLIENT_REQUEST_BYTES)
-  const requestLine = Buffer.from(`${JSON.stringify(request)}\n`)
+  const capturedRequest = snapshotJsonValue(request, {
+    code: 'HOST_INPUT_INVALID',
+    label: 'host request',
+    maxBytes: MAX_HOST_CLIENT_REQUEST_BYTES,
+  })
+  assertHostRequest(capturedRequest, MAX_HOST_CLIENT_REQUEST_BYTES)
+  const requestLine = Buffer.from(`${JSON.stringify(capturedRequest)}\n`)
 
   return await new Promise((resolve, reject) => {
     let settled = false
     let buffer = Buffer.alloc(0)
+    // The write side stays open until the response arrives. Servers frame one
+    // JSON line per connection and end the socket themselves; half-closing
+    // here would make installed 0.1.x services discard their response.
     const socket = createConnection({ path: socketPath })
     const finish = (method, value) => {
       if (settled) return
@@ -68,13 +77,16 @@ export async function requestDirectHost({
       }
       const newline = buffer.indexOf(0x0a)
       if (newline === -1) return
-      const trailing = buffer.subarray(newline + 1).toString('utf8').trim()
-      if (trailing.length !== 0) {
-        finish(reject, new HostError('HOST_PROTOCOL_ERROR', 'Host service returned more than one response'))
-        return
-      }
       try {
-        const response = parseStrictJson(buffer.subarray(0, newline).toString('utf8'), 'host response')
+        if (newline !== buffer.length - 1) {
+          decodeUtf8Strict(buffer.subarray(newline + 1), 'host response trailing bytes')
+          finish(reject, new HostError('HOST_PROTOCOL_ERROR', 'Host service returned more than one response'))
+          return
+        }
+        const response = parseStrictJson(
+          decodeUtf8Strict(buffer.subarray(0, newline), 'host response'),
+          'host response',
+        )
         assertHostResponse(response, id, maxResponseBytes)
         if (response.status === 'host_error') finish(reject, responseError(response.error))
         else finish(resolve, response.result)
@@ -82,14 +94,21 @@ export async function requestDirectHost({
         finish(reject, error)
       }
     })
+    socket.once('end', () => {
+      if (settled) return
+      finish(reject, new HostError(
+        'HOST_TRANSPORT_ERROR',
+        buffer.length === 0
+          ? 'Host service closed without a response; the installed service may predate the current client'
+          : 'Host service closed without a complete response',
+        { retryable: true },
+      ))
+    })
     socket.once('error', (error) => {
       finish(reject, new HostError('HOST_SERVICE_UNAVAILABLE', `Host service connection failed: ${error.message}`, {
         cause: error,
         retryable: true,
       }))
-    })
-    socket.once('end', () => {
-      if (!settled) finish(reject, new HostError('HOST_TRANSPORT_ERROR', 'Host service closed without a complete response', { retryable: true }))
     })
   })
 }

@@ -1,23 +1,28 @@
 #!/usr/bin/env node
 import process from 'node:process'
+import { resolve } from 'node:path'
 import { loadRuntimeConfig } from './config.mjs'
 import { hostErrorPayload, HostError } from './errors.mjs'
 import { requestDirectHost, MAX_HOST_CLIENT_REQUEST_BYTES } from './host-client.mjs'
 import { DirectHostService } from './host-service.mjs'
-import { parseStrictJson, readStrictJsonFile } from './json.mjs'
+import { decodeUtf8Strict, parseStrictJson, readStrictJsonFile } from './json.mjs'
 import { DirectExecutionRuntime } from './runtime.mjs'
+import { JsonlObservationSink } from './observations.mjs'
 
 function usage() {
   return `Usage:
   openadam-direct-exec inspect (--config PATH | --socket PATH) [--pretty]
+  openadam-direct-exec resolve --config PATH --requirement PATH|- [--pretty]
+  openadam-direct-exec project (--config PATH | --socket PATH) --selection PATH|- [--pretty]
   openadam-direct-exec validate (--config PATH | --socket PATH) --work-order PATH|- [--pretty]
-  openadam-direct-exec run (--config PATH | --socket PATH) --work-order PATH|- [--pretty]
-  openadam-direct-exec serve --config PATH --socket PATH [--replace-stale-socket] [--max-connections N] [--pretty]`
+  openadam-direct-exec run --config PATH --work-order PATH|- [--observation-log PATH] [--pretty]
+  openadam-direct-exec run --socket PATH --work-order PATH|- [--pretty]
+  openadam-direct-exec serve --config PATH --socket PATH [--observation-log PATH] [--replace-stale-socket] [--max-connections N] [--pretty]`
 }
 
 function parseArguments(argv) {
   const [command, ...rest] = argv
-  if (!['inspect', 'validate', 'run', 'serve'].includes(command)) {
+  if (!['inspect', 'resolve', 'project', 'validate', 'run', 'serve'].includes(command)) {
     throw new HostError('HOST_CLI_USAGE', usage())
   }
   const options = { command, pretty: false, replaceStaleSocket: false }
@@ -32,14 +37,17 @@ function parseArguments(argv) {
       options.replaceStaleSocket = true
       continue
     }
-    if (['--config', '--socket', '--work-order', '--max-connections'].includes(argument)) {
+    if (['--config', '--socket', '--work-order', '--selection', '--requirement', '--max-connections', '--observation-log'].includes(argument)) {
       const value = rest[index + 1]
       if (value === undefined || value.startsWith('--')) throw new HostError('HOST_CLI_USAGE', `${argument} requires a value`)
       const key = {
         '--config': 'config',
         '--socket': 'socket',
         '--work-order': 'workOrder',
+        '--selection': 'selection',
+        '--requirement': 'requirement',
         '--max-connections': 'maxConnections',
+        '--observation-log': 'observationLog',
       }[argument]
       if (options[key] !== undefined) throw new HostError('HOST_CLI_USAGE', `${argument} may appear only once`)
       options[key] = argument === '--max-connections' ? Number(value) : value
@@ -53,20 +61,45 @@ function parseArguments(argv) {
     if (options.config === undefined || options.socket === undefined) {
       throw new HostError('HOST_CLI_USAGE', 'serve requires both --config and --socket')
     }
-    if (options.workOrder !== undefined) throw new HostError('HOST_CLI_USAGE', '--work-order does not apply to serve')
+    if (options.workOrder !== undefined || options.selection !== undefined || options.requirement !== undefined) {
+      throw new HostError('HOST_CLI_USAGE', '--work-order, --selection, and --requirement do not apply to serve')
+    }
     return options
   }
   if ((options.config === undefined) === (options.socket === undefined)) {
     throw new HostError('HOST_CLI_USAGE', `${command} requires exactly one of --config or --socket`)
   }
+  if (command === 'resolve' && options.socket !== undefined) {
+    throw new HostError('HOST_CLI_USAGE', 'resolve is a config-backed v0.1 operation and does not use the v0.1 Socket protocol')
+  }
+  if (options.socket !== undefined && options.observationLog !== undefined) {
+    throw new HostError('HOST_CLI_USAGE', '--observation-log is configured by the serving runtime, not a socket client')
+  }
+  if (options.observationLog !== undefined && command !== 'run') {
+    throw new HostError('HOST_CLI_USAGE', '--observation-log applies only to config-backed run or serve')
+  }
   if (options.replaceStaleSocket || options.maxConnections !== undefined) {
     throw new HostError('HOST_CLI_USAGE', '--replace-stale-socket and --max-connections apply only to serve')
   }
-  if (command !== 'inspect' && options.workOrder === undefined) {
-    throw new HostError('HOST_CLI_USAGE', '--work-order is required')
+  if (command === 'project') {
+    if (options.selection === undefined || options.workOrder !== undefined || options.requirement !== undefined) {
+      throw new HostError('HOST_CLI_USAGE', 'project requires --selection and does not accept --work-order or --requirement')
+    }
+  } else if (options.selection !== undefined) {
+    throw new HostError('HOST_CLI_USAGE', '--selection applies only to project')
   }
-  if (command === 'inspect' && options.workOrder !== undefined) {
-    throw new HostError('HOST_CLI_USAGE', '--work-order does not apply to inspect')
+  if (command === 'resolve') {
+    if (options.requirement === undefined || options.workOrder !== undefined) {
+      throw new HostError('HOST_CLI_USAGE', 'resolve requires --requirement and does not accept --work-order')
+    }
+  } else if (options.requirement !== undefined) {
+    throw new HostError('HOST_CLI_USAGE', '--requirement applies only to resolve')
+  }
+  if (['validate', 'run'].includes(command) && options.workOrder === undefined) {
+    throw new HostError('HOST_CLI_USAGE', `${command} requires --work-order`)
+  }
+  if (['inspect', 'resolve', 'project'].includes(command) && options.workOrder !== undefined) {
+    throw new HostError('HOST_CLI_USAGE', `--work-order does not apply to ${command}`)
   }
   return options
 }
@@ -76,17 +109,17 @@ async function readStdinBounded(limit) {
   let bytes = 0
   for await (const chunk of process.stdin) {
     bytes += chunk.length
-    if (bytes > limit) throw new HostError('HOST_INPUT_TOO_LARGE', `stdin work order exceeds ${limit} bytes`)
+    if (bytes > limit) throw new HostError('HOST_INPUT_TOO_LARGE', `stdin input exceeds ${limit} bytes`)
     chunks.push(chunk)
   }
-  return Buffer.concat(chunks).toString('utf8')
+  return decodeUtf8Strict(Buffer.concat(chunks), 'stdin input')
 }
 
-async function readWorkOrder(path, limit) {
-  if (path !== '-') return await readStrictJsonFile(path, limit, 'work order')
+async function readJsonInput(path, limit, label) {
+  if (path !== '-') return await readStrictJsonFile(path, limit, label)
   const text = await readStdinBounded(limit)
-  if (Buffer.byteLength(text) > limit) throw new HostError('HOST_INPUT_TOO_LARGE', `work order exceeds ${limit} bytes`)
-  return parseStrictJson(text, 'work order')
+  if (Buffer.byteLength(text) > limit) throw new HostError('HOST_INPUT_TOO_LARGE', `${label} exceeds ${limit} bytes`)
+  return parseStrictJson(text, label)
 }
 
 function print(value, pretty) {
@@ -115,7 +148,11 @@ async function main() {
     const options = parseArguments(process.argv.slice(2))
     if (options.command === 'serve') {
       const config = await loadRuntimeConfig(options.config)
-      runtime = new DirectExecutionRuntime(config)
+      runtime = new DirectExecutionRuntime(config, {
+        ...(options.observationLog === undefined ? {} : {
+          observationSink: new JsonlObservationSink(resolve(options.observationLog)),
+        }),
+      })
       service = new DirectHostService(runtime, {
         socketPath: options.socket,
         replaceStaleSocket: options.replaceStaleSocket,
@@ -127,13 +164,17 @@ async function main() {
     }
 
     if (options.socket !== undefined) {
-      const workOrder = options.command === 'inspect'
+      const workOrder = ['inspect', 'project'].includes(options.command)
         ? undefined
-        : await readWorkOrder(options.workOrder, MAX_HOST_CLIENT_REQUEST_BYTES)
+        : await readJsonInput(options.workOrder, MAX_HOST_CLIENT_REQUEST_BYTES, 'work order')
+      const selection = options.command === 'project'
+        ? await readJsonInput(options.selection, MAX_HOST_CLIENT_REQUEST_BYTES, 'contract selection')
+        : undefined
       const output = await requestDirectHost({
         socketPath: options.socket,
         action: options.command,
         workOrder,
+        selection,
         signal: controller.signal,
         timeoutMs: clientTimeout(workOrder),
       })
@@ -143,12 +184,30 @@ async function main() {
     }
 
     const config = await loadRuntimeConfig(options.config)
-    runtime = new DirectExecutionRuntime(config)
+    runtime = new DirectExecutionRuntime(config, {
+      ...(options.observationLog === undefined ? {} : {
+        observationSink: new JsonlObservationSink(resolve(options.observationLog)),
+      }),
+    })
     if (options.command === 'inspect') {
       print(await runtime.inspectBindings(), options.pretty)
       return
     }
-    const workOrder = await readWorkOrder(options.workOrder, config.limits.maxWorkOrderBytes)
+    if (options.command === 'resolve') {
+      const requirement = await readJsonInput(
+        options.requirement,
+        config.limits.maxWorkOrderBytes,
+        'resolution request',
+      )
+      print(await runtime.resolveBindings(requirement, { signal: controller.signal }), options.pretty)
+      return
+    }
+    if (options.command === 'project') {
+      const selection = await readJsonInput(options.selection, config.limits.maxWorkOrderBytes, 'contract selection')
+      print(await runtime.projectContract(selection), options.pretty)
+      return
+    }
+    const workOrder = await readJsonInput(options.workOrder, config.limits.maxWorkOrderBytes, 'work order')
     const output = options.command === 'validate'
       ? await runtime.validateWorkOrder(workOrder)
       : await runtime.runWorkOrder(workOrder, { signal: controller.signal })

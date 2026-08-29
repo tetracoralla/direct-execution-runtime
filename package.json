@@ -1,6 +1,6 @@
 {
   "name": "@openadam/direct-execution-runtime",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "Apache-2.0",
   "author": "openAdam",
@@ -50,7 +50,9 @@
     "check:repository": "node scripts/check-repository.mjs",
     "check": "npm run check:syntax && npm test && npm run check:legal && npm run check:repository && npm run check:package",
     "check:package": "node scripts/check-package.mjs",
+    "check:schema-parity": "node scripts/check-schema-parity.mjs",
     "check:local-pilots": "node scripts/check-local-pilots.mjs",
+    "check:structured-data-procedure": "node scripts/check-structured-data-procedure.mjs",
     "demo:math-anchor": "node examples/demo-math-anchor.mjs",
     "audit:production": "npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org"
   },

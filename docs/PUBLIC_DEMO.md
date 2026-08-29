@@ -43,7 +43,10 @@ The command prints one JSON observation to stdout and writes nothing to either
 repository. Its `semanticChecks` distinguish the exact provider result, a
 provider-owned `E_NAME` error, and a host-owned `HOST_INPUT_INVALID` rejection.
 Its measurements separate the first direct call from ten calls that reuse the
-same provider session.
+same provider session. The work order names both `math.run` and
+`expression.evaluate`; the runtime projects that one live operation contract
+instead of compiling Math Anchor's entire operation union for each selected
+call.
 
 ## Read the result honestly
 

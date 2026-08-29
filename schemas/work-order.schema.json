@@ -41,6 +41,16 @@
         "toolName": { "$ref": "#/$defs/id" }
       }
     },
+    "mcpOperationTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "toolName", "operationId"],
+      "properties": {
+        "kind": { "const": "mcp-operation" },
+        "toolName": { "$ref": "#/$defs/id" },
+        "operationId": { "$ref": "#/$defs/id" }
+      }
+    },
     "procedureTarget": {
       "type": "object",
       "additionalProperties": false,
@@ -62,7 +72,8 @@
           "oneOf": [
             { "$ref": "#/$defs/capabilityTarget" },
             { "$ref": "#/$defs/procedureTarget" },
-            { "$ref": "#/$defs/mcpTarget" }
+            { "$ref": "#/$defs/mcpTarget" },
+            { "$ref": "#/$defs/mcpOperationTarget" }
           ]
         },
         "input": { "type": "object" },

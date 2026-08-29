@@ -14,6 +14,14 @@ identity. After execution, the returned runtime binding must match the pinned
 provider version and target digest before the driver echoes the evaluated
 runtime identity.
 
+For an ordinary MCP tool, `--target-kind mcp-tool` keeps the historical rule
+that `--operation-id` names the tool. For a declared multi-operation MCP tool,
+the driver instead requires `--target-kind mcp-operation`, `--tool-name` for the
+carrier tool, and `--operation-id` for the selected typed branch. The evaluator
+task must repeat that selected operation id. This preserves operation identity
+through grading and prevents the driver from bypassing the Runtime's projected
+contract with the raw wide tool.
+
 Host, transport, identity, and protocol failures make the driver exit nonzero
 so the evaluator records an infrastructure failure. A provider-owned domain
 error becomes a valid driver result with `status: error`. The adapter does not

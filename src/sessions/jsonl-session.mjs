@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process'
 import { getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { revalidatePreparedBinding } from '../config.mjs'
 import { boundedMessage, HostError } from '../errors.mjs'
-import { jsonBytes, parseStrictJson } from '../json.mjs'
+import { decodeUtf8Strict, jsonBytes, parseStrictJson } from '../json.mjs'
+import { createLaunchSnapshot } from '../launch-snapshot.mjs'
 import { assertSchema } from '../schema.mjs'
 
 function killProcessGroup(child, signal = 'SIGKILL') {
@@ -55,6 +57,15 @@ async function awaitWithDeadline(promise, { signal, deadlineAt } = {}) {
   })
 }
 
+async function awaitCancelledStartup(starting) {
+  if (starting === undefined) return
+  try {
+    await starting
+  } catch (error) {
+    if (error?.code === 'HOST_CLEANUP_FAILED') throw error
+  }
+}
+
 export class JsonlSession {
   #child
   #buffer = Buffer.alloc(0)
@@ -64,8 +75,10 @@ export class JsonlSession {
   #generation = 0
   #starting
   #cleanup = Promise.resolve()
+  #closePromise
   #startedAt
   #lastResponseAt
+  #launchSnapshot
 
   constructor(binding) {
     this.binding = binding
@@ -119,29 +132,49 @@ export class JsonlSession {
       return { sessionState: 'cold' }
     }
     if (this.#child !== undefined && this.#child.exitCode === null) return { sessionState: 'warm' }
-    this.#starting = this.#start()
+    const starting = (async () => {
+      await revalidatePreparedBinding(this.binding)
+      if (this.#starting !== starting) {
+        throw new HostError('HOST_PROVIDER_REPLACED', 'JSONL session startup was replaced', { retryable: true })
+      }
+      await this.#start(starting)
+    })()
+    this.#starting = starting
     try {
-      await awaitWithDeadline(this.#starting, options)
+      await awaitWithDeadline(starting, options)
     } catch (error) {
       if (error?.code === 'HOST_TIMEOUT' || error?.code === 'HOST_CANCELLED') await this.close()
       throw error
     } finally {
-      this.#starting = undefined
+      if (this.#starting === starting) this.#starting = undefined
     }
     return { sessionState: 'cold' }
   }
 
-  async #start() {
+  async #start(starting) {
     this.#closing = false
     this.#buffer = Buffer.alloc(0)
     this.#stderr = Buffer.alloc(0)
-    const child = spawn(this.binding.adapterCommand, this.binding.adapterArgs, {
-      cwd: this.binding.adapterCwd,
-      env: getDefaultEnvironment(),
-      detached: true,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: false,
-    })
+    const launchSnapshot = await createLaunchSnapshot(this.binding)
+    if (this.#starting !== starting) {
+      await this.#releaseLaunchSnapshot(launchSnapshot)
+      throw new HostError('HOST_PROVIDER_REPLACED', 'JSONL session startup was replaced', { retryable: true })
+    }
+    this.#launchSnapshot = launchSnapshot
+    let child
+    try {
+      const environment = await launchSnapshot.prepareEnvironment(getDefaultEnvironment())
+      child = spawn(launchSnapshot.command, launchSnapshot.args, {
+        cwd: launchSnapshot.cwd,
+        env: environment,
+        detached: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        shell: false,
+      })
+    } catch (error) {
+      await this.#releaseLaunchSnapshot(launchSnapshot)
+      throw error
+    }
     this.#child = child
     this.#generation += 1
     this.#startedAt = new Date().toISOString()
@@ -151,6 +184,14 @@ export class JsonlSession {
     })
     child.stderr.on('data', (chunk) => {
       if (this.#child === child) this.#consumeStderr(chunk)
+    })
+    child.stdin.on('error', (error) => {
+      if (this.#child === child) {
+        this.#replace(new HostError('HOST_TRANSPORT_ERROR', boundedMessage(error.message), {
+          cause: error,
+          retryable: true,
+        }))
+      }
     })
     child.on('error', (error) => {
       if (this.#child === child) {
@@ -166,25 +207,35 @@ export class JsonlSession {
         ))
       }
     })
-    await new Promise((resolve, reject) => {
-      const onSpawn = () => {
-        cleanup()
-        resolve()
-      }
-      const onError = (error) => {
-        cleanup()
-        reject(new HostError('HOST_PROVIDER_UNAVAILABLE', error.message, { cause: error }))
-      }
-      const cleanup = () => {
-        child.off('spawn', onSpawn)
-        child.off('error', onError)
-      }
-      child.once('spawn', onSpawn)
-      child.once('error', onError)
-    })
+    try {
+      await new Promise((resolve, reject) => {
+        const onSpawn = () => {
+          cleanup()
+          resolve()
+        }
+        const onError = (error) => {
+          cleanup()
+          reject(new HostError('HOST_PROVIDER_UNAVAILABLE', error.message, { cause: error }))
+        }
+        const cleanup = () => {
+          child.off('spawn', onSpawn)
+          child.off('error', onError)
+        }
+        child.once('spawn', onSpawn)
+        child.once('error', onError)
+      })
+    } catch (error) {
+      await this.#releaseLaunchSnapshot(launchSnapshot)
+      throw error
+    }
   }
 
-  validateCall(call) {
+  async validateCall(call, options = {}) {
+    await awaitWithDeadline(revalidatePreparedBinding(this.binding), options)
+    return this.#validateCallShape(call)
+  }
+
+  #validateCallShape(call) {
     if (this.binding.transport === 'procedure-jsonl-v0.2') {
       if (
         call.target.kind !== 'procedure' ||
@@ -197,6 +248,7 @@ export class JsonlSession {
       return {
         validateOutput: this.binding.validateOutput,
         label: call.target.procedureId,
+        contractDigest: this.binding.contractDigest,
       }
     }
     const operation = this.binding.operations.get(call.target.operationId)
@@ -214,8 +266,48 @@ export class JsonlSession {
     return { ...operation, label: call.target.operationId }
   }
 
+  async projectContract(target, options = {}) {
+    await awaitWithDeadline(revalidatePreparedBinding(this.binding), options)
+    if (this.binding.transport === 'procedure-jsonl-v0.2') {
+      if (
+        target.kind !== 'procedure' ||
+        target.procedureId !== this.binding.procedureId ||
+        target.procedureVersion !== this.binding.procedureVersion
+      ) {
+        throw new HostError('HOST_BINDING_MISMATCH', 'Projection Procedure identity does not match the selected provider binding')
+      }
+      return {
+        inputSchema: structuredClone(this.binding.inputSchema),
+        outputSchema: structuredClone(this.binding.outputSchema),
+        errors: [...this.binding.procedureErrors.values()].map(({ code, retryable }) => ({ code, retryable })),
+        contractDigest: this.binding.contractDigest,
+        contractSource: 'configured-files',
+        schemaBytes: this.binding.contractSchemaBytes,
+      }
+    }
+    if (
+      target.kind !== 'capability' ||
+      target.capabilityId !== this.binding.capabilityId ||
+      target.capabilityVersion !== this.binding.capabilityVersion
+    ) {
+      throw new HostError('HOST_BINDING_MISMATCH', 'Projection Capability identity does not match the selected provider binding')
+    }
+    const operation = this.binding.operations.get(target.operationId)
+    if (operation === undefined) {
+      throw new HostError('HOST_UNKNOWN_OPERATION', `Unknown Capability operation ${target.operationId}`)
+    }
+    return {
+      inputSchema: structuredClone(operation.inputSchema),
+      outputSchema: structuredClone(operation.outputSchema),
+      errors: [...operation.errors.values()].map(({ code, retryable }) => ({ code, retryable })),
+      contractDigest: operation.contractDigest,
+      contractSource: 'configured-files',
+      schemaBytes: operation.schemaBytes,
+    }
+  }
+
   async invoke(call, { signal, deadlineAt, providerRequestId }) {
-    const contract = this.validateCall(call)
+    const contract = this.#validateCallShape(call)
     const { sessionState } = await this.ensureStarted({ signal, deadlineAt })
     const remaining = deadlineAt - Date.now()
     if (remaining <= 0) throw new HostError('HOST_TIMEOUT', 'Call deadline expired before provider invocation')
@@ -298,7 +390,7 @@ export class JsonlSession {
         result: response.result,
         sessionState,
         providerRoundTripMs: performance.now() - roundTripStarted,
-        contractDigest: this.binding.contractDigest,
+        contractDigest: contract.contractDigest,
       }
     }
     if (response.ok === false && response.error !== null && typeof response.error === 'object') {
@@ -331,13 +423,44 @@ export class JsonlSession {
           throw error
         }
         providerError = { ...response.error, retryable: declaration.retryable }
+      } else {
+        const errorFields = Object.keys(response.error).sort()
+        const exactLegacyFields =
+          JSON.stringify(errorFields) === JSON.stringify(['code', 'message'])
+        const exactEchoFields =
+          JSON.stringify(errorFields) === JSON.stringify(['code', 'message', 'retryable'])
+        if (!exactLegacyFields && !exactEchoFields) {
+          const error = new HostError('HOST_PROVIDER_PROTOCOL_ERROR', 'Capability returned an inexact error envelope')
+          this.#replace(error)
+          throw error
+        }
+        const declaration = contract.errors.get(response.error.code)
+        if (declaration === undefined) {
+          const error = new HostError('HOST_PROVIDER_PROTOCOL_ERROR', 'Capability returned an undeclared error code')
+          this.#replace(error)
+          throw error
+        }
+        if (
+          Object.hasOwn(response.error, 'retryable') &&
+          (typeof response.error.retryable !== 'boolean' ||
+            response.error.retryable !== declaration.retryable)
+        ) {
+          const error = new HostError('HOST_PROVIDER_PROTOCOL_ERROR', 'Capability error retryability differs from the Profile')
+          this.#replace(error)
+          throw error
+        }
+        providerError = {
+          code: response.error.code,
+          message: response.error.message,
+          retryable: declaration.retryable,
+        }
       }
       return {
         ok: false,
         error: providerError,
         sessionState,
         providerRoundTripMs: performance.now() - roundTripStarted,
-        contractDigest: this.binding.contractDigest,
+        contractDigest: contract.contractDigest,
       }
     }
     const error = new HostError('HOST_PROVIDER_PROTOCOL_ERROR', 'Capability adapter returned neither success nor provider error')
@@ -355,7 +478,11 @@ export class JsonlSession {
         this.#replace(new HostError('HOST_PROVIDER_PROTOCOL_ERROR', 'Capability adapter emitted an oversized protocol line'))
         return
       }
-      if (line.length > 0) this.#consumeLine(line)
+      if (line.length === 0) {
+        this.#replace(new HostError('HOST_PROVIDER_PROTOCOL_ERROR', 'Capability adapter emitted an empty protocol line'))
+        return
+      }
+      this.#consumeLine(line)
       newline = this.#buffer.indexOf(0x0a)
     }
     if (this.#buffer.length > this.binding.limits.maxProtocolLineBytes) {
@@ -366,7 +493,10 @@ export class JsonlSession {
   #consumeLine(line) {
     let response
     try {
-      response = parseStrictJson(line.toString('utf8'), 'Capability adapter response')
+      response = parseStrictJson(
+        decodeUtf8Strict(line, 'Capability adapter response', 'HOST_PROVIDER_PROTOCOL_ERROR'),
+        'Capability adapter response',
+      )
     } catch (error) {
       this.#replace(new HostError('HOST_PROVIDER_PROTOCOL_ERROR', boundedMessage(error.message), { cause: error }))
       return
@@ -391,7 +521,7 @@ export class JsonlSession {
     }
   }
 
-  #failSession(error, primaryRequestId) {
+  #failSession(error, primaryRequestId, releaseSnapshot = true) {
     const pending = [...this.#pending.entries()]
     this.#pending.clear()
     for (const [requestId, item] of pending) {
@@ -405,41 +535,90 @@ export class JsonlSession {
       }
     }
     this.#child = undefined
+    if (releaseSnapshot) {
+      const launchSnapshot = this.#launchSnapshot
+      this.#cleanup = this.#releaseLaunchSnapshot(launchSnapshot)
+    }
+  }
+
+  async #releaseLaunchSnapshot(snapshot) {
+    if (snapshot === undefined) return
+    if (this.#launchSnapshot === snapshot) this.#launchSnapshot = undefined
+    try {
+      await snapshot.dispose()
+    } catch (error) {
+      throw new HostError('HOST_CLEANUP_FAILED', 'JSONL provider launch snapshot was not removed', { cause: error })
+    }
   }
 
   #replace(error, primaryRequestId) {
     const child = this.#child
+    const launchSnapshot = this.#launchSnapshot
     this.#closing = true
-    this.#failSession(error, primaryRequestId)
+    this.#failSession(error, primaryRequestId, false)
     if (child !== undefined) {
       killProcessGroup(child)
       this.#cleanup = (async () => {
         if (!(await waitForExit(child, 750))) {
           throw new HostError('HOST_CLEANUP_FAILED', 'Capability adapter process did not exit after forced replacement')
         }
+        await this.#releaseLaunchSnapshot(launchSnapshot)
       })()
+    } else {
+      this.#cleanup = this.#releaseLaunchSnapshot(launchSnapshot)
     }
   }
 
   async close() {
-    const child = this.#child
-    if (child === undefined) {
-      await this.#cleanup
-      return
+    if (this.#closePromise !== undefined) return await this.#closePromise
+    const closing = this.#closeOwned()
+    this.#closePromise = closing
+    try {
+      await closing
+    } finally {
+      if (this.#closePromise === closing) this.#closePromise = undefined
     }
+  }
+
+  async #closeOwned() {
+    const starting = this.#starting
+    this.#starting = undefined
+    const child = this.#child
     this.#closing = true
     this.#child = undefined
     for (const pending of this.#pending.values()) {
       pending.reject(new HostError('HOST_PROVIDER_REPLACED', 'Capability adapter session was replaced', { retryable: true }))
     }
     this.#pending.clear()
-    child.stdin.end()
-    if (!(await waitForExit(child, 250))) {
-      killProcessGroup(child)
-      if (!(await waitForExit(child, 750))) {
-        throw new HostError('HOST_CLEANUP_FAILED', 'Capability adapter process did not exit after forced termination')
+
+    let cleanupError
+    const cleanup = async (action, message) => {
+      try {
+        await action()
+      } catch (error) {
+        cleanupError ??= error instanceof HostError && error.code === 'HOST_CLEANUP_FAILED'
+          ? error
+          : new HostError('HOST_CLEANUP_FAILED', message, { cause: error })
       }
     }
-    await this.#cleanup
+
+    if (child !== undefined) {
+      await cleanup(async () => {
+        child.stdin.end()
+        if (!(await waitForExit(child, 250))) {
+          killProcessGroup(child)
+          if (!(await waitForExit(child, 750))) {
+            throw new HostError('HOST_CLEANUP_FAILED', 'Capability adapter process did not exit after forced termination')
+          }
+        }
+      }, 'Capability adapter process did not close cleanly')
+    }
+    await cleanup(() => this.#cleanup, 'Capability adapter replacement cleanup did not finish')
+    await cleanup(() => awaitCancelledStartup(starting), 'JSONL session startup cleanup did not finish')
+    await cleanup(
+      () => this.#releaseLaunchSnapshot(this.#launchSnapshot),
+      'JSONL provider launch snapshot was not removed',
+    )
+    if (cleanupError !== undefined) throw cleanupError
   }
 }

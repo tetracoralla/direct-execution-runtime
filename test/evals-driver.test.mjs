@@ -9,7 +9,7 @@ import { EVALS_DRIVER_ID, EVALS_DRIVER_VERSION } from '../src/evals-driver-ident
 import { DirectHostService } from '../src/host-service.mjs'
 import { DirectExecutionRuntime } from '../src/runtime.mjs'
 import { assertSchema, createValidator, loadBundledSchema } from '../src/schema.mjs'
-import { fakeConfig, repositoryRoot } from './helpers.mjs'
+import { fakeConfig, fakeProjectedMcpConfig, repositoryRoot } from './helpers.mjs'
 
 const driverPath = resolve(repositoryRoot, 'src/evals-driver.mjs')
 
@@ -42,7 +42,7 @@ function request(overrides = {}) {
     targetCapability: { id: 'org.openadam.test.echo', version: '0.1.0' },
     providerRef: overrides.providerRef,
     driverRef: { id: EVALS_DRIVER_ID, version: EVALS_DRIVER_VERSION },
-    budget: { timeoutMs: 1000 },
+    budget: { timeoutMs: 10000 },
     isolation: { mode: 'deny-read-roots', deniedReadRoots: ['/tmp/evals-oracle'] },
     ...overrides.request,
   }
@@ -50,7 +50,7 @@ function request(overrides = {}) {
 
 test('evaluator driver pins identity and invokes a persistent host service', async () => {
   await chmod(driverPath, 0o755)
-  const directory = await mkdtemp(resolve(tmpdir(), 'direct-exec-evals-driver-'))
+  const directory = await mkdtemp(resolve(tmpdir(), 'de-eval-'))
   const socketPath = resolve(directory, 'runtime.sock')
   const prepared = await prepareRuntimeConfig(fakeConfig())
   const binding = prepared.providers.get('test.fake-capability')
@@ -97,6 +97,58 @@ test('evaluator driver pins identity and invokes a persistent host service', asy
     }))
     assert.notEqual(mismatch.code, 0)
     assert.equal(mismatch.stdout, '')
+    assert.equal(JSON.parse(mismatch.stderr).code, 'HOST_EVAL_IDENTITY_MISMATCH')
+  } finally {
+    await service.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('evaluator driver preserves an explicit projected MCP operation target', async () => {
+  await chmod(driverPath, 0o755)
+  const directory = await mkdtemp(resolve(tmpdir(), 'de-proj-'))
+  const socketPath = resolve(directory, 'runtime.sock')
+  const prepared = await prepareRuntimeConfig(fakeProjectedMcpConfig())
+  const binding = prepared.providers.get('test.fake-mcp')
+  const runtime = new DirectExecutionRuntime(prepared)
+  const service = new DirectHostService(runtime, { socketPath })
+  await service.start()
+  const target = { id: 'test.fake-mcp.dispatch.text-upper', version: binding.bindingDigest }
+  const providerRef = { id: 'test.fake-mcp', version: '0.1.0' }
+  const args = [
+    '--socket', socketPath,
+    '--provider-id', providerRef.id,
+    '--provider-version', providerRef.version,
+    '--target-id', target.id,
+    '--target-version', target.version,
+    '--target-kind', 'mcp-operation',
+    '--tool-name', 'dispatch',
+    '--operation-id', 'text.upper',
+  ]
+  const projectedRequest = request({
+    target,
+    providerRef,
+    request: {
+      targetCapability: undefined,
+      task: {
+        id: 'text.upper',
+        invocation: {
+          operationId: 'text.upper',
+          input: { operation: 'text.upper', arguments: { value: 'hello' } },
+        },
+        tags: ['fixture'],
+      },
+    },
+  })
+  try {
+    const result = await runDriver(args, projectedRequest)
+    assert.equal(result.code, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout).answer, { value: 'HELLO' })
+
+    const wrongOperation = structuredClone(projectedRequest)
+    wrongOperation.task.invocation.operationId = 'number.double'
+    const mismatch = await runDriver(args, wrongOperation)
+    assert.notEqual(mismatch.code, 0)
     assert.equal(JSON.parse(mismatch.stderr).code, 'HOST_EVAL_IDENTITY_MISMATCH')
   } finally {
     await service.close()

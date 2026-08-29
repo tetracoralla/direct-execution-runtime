@@ -39,6 +39,32 @@ test('CLI validates and runs one stdin work order without persisting it', async 
     const ran = await runCli(['run', '--config', configPath, '--work-order', '-'], order)
     assert.equal(ran.code, 0, ran.stderr)
     assert.equal(JSON.parse(ran.stdout).calls[0].result.value, 'cli-ok')
+    const selection = JSON.stringify({
+      schemaVersion: 'openadam.direct-contract-selection.v0.1',
+      providerId: 'test.fake-capability',
+      target: {
+        kind: 'capability',
+        capabilityId: 'org.openadam.test.echo',
+        capabilityVersion: '0.1.0',
+        operationId: 'echo',
+      },
+    })
+    const projected = await runCli(['project', '--config', configPath, '--selection', '-'], selection)
+    assert.equal(projected.code, 0, projected.stderr)
+    assert.equal(JSON.parse(projected.stdout).target.operationId, 'echo')
+    const resolution = JSON.stringify({
+      schemaVersion: 'openadam.direct-resolution-request.v0.1',
+      target: {
+        kind: 'capability',
+        capabilityId: 'org.openadam.test.echo',
+        capabilityVersion: '0.1.0',
+        operationId: 'echo',
+      },
+      constraints: { effectAllowance: 'read-only', dataLocality: 'local-process' },
+    })
+    const resolved = await runCli(['resolve', '--config', configPath, '--requirement', '-'], resolution)
+    assert.equal(resolved.code, 0, resolved.stderr)
+    assert.equal(JSON.parse(resolved.stdout).status, 'eligible_for_this_request')
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -91,6 +117,15 @@ test('CLI serve and socket client keep a provider warm across processes', async 
     const second = await runCli(['run', '--socket', socketPath, '--work-order', '-'], secondOrder)
     assert.equal(second.code, 0, second.stderr)
     assert.equal(JSON.parse(second.stdout).calls[0].session, 'warm')
+    const unsupportedResolution = await runCli([
+      'resolve', '--socket', socketPath, '--requirement', '-',
+    ], JSON.stringify({
+      schemaVersion: 'openadam.direct-resolution-request.v0.1',
+      target: { kind: 'mcp-tool', toolName: 'echo' },
+      constraints: { effectAllowance: 'read-only', dataLocality: 'local-process' },
+    }))
+    assert.equal(unsupportedResolution.code, 64)
+    assert.equal(JSON.parse(unsupportedResolution.stdout).error.code, 'HOST_CLI_USAGE')
   } finally {
     if (service !== undefined && service.exitCode === null) {
       service.kill('SIGTERM')

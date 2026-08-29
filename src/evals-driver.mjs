@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { boundedMessage, HostError } from './errors.mjs'
 import { EVALS_DRIVER_ID, EVALS_DRIVER_VERSION } from './evals-driver-identity.mjs'
 import { requestDirectHost } from './host-client.mjs'
-import { parseStrictJson } from './json.mjs'
+import { decodeUtf8Strict, parseStrictJson } from './json.mjs'
 import { assertSchema, createValidator, loadBundledSchema } from './schema.mjs'
 
 const MAX_REQUEST_BYTES = 1024 * 1024
@@ -14,16 +14,16 @@ const RUNTIME_MAX_TIMEOUT_MS = 300_000
 function usage() {
   return `Usage:
   openadam-direct-evals-driver --socket PATH --provider-id ID --provider-version VERSION \\
-    --target-id ID --target-version VERSION --target-kind capability|procedure|mcp-tool \\
+    --target-id ID --target-version VERSION --target-kind capability|procedure|mcp-tool|mcp-operation \\
     --operation-id ID [--capability-id ID --capability-version VERSION] \\
-    [--procedure-id ID --procedure-version VERSION]`
+    [--procedure-id ID --procedure-version VERSION] [--tool-name NAME]`
 }
 
 function parseArguments(argv) {
   const names = new Set([
     '--socket', '--provider-id', '--provider-version', '--target-id', '--target-version',
     '--target-kind', '--operation-id', '--capability-id', '--capability-version',
-    '--procedure-id', '--procedure-version',
+    '--procedure-id', '--procedure-version', '--tool-name',
   ])
   const options = {}
   for (let index = 0; index < argv.length; index += 2) {
@@ -42,15 +42,17 @@ function parseArguments(argv) {
     if (options[required] === undefined) throw new HostError('HOST_EVAL_DRIVER_USAGE', usage())
   }
   if (!isAbsolute(options.socket)) throw new HostError('HOST_EVAL_DRIVER_USAGE', '--socket must be absolute')
-  if (!['capability', 'procedure', 'mcp-tool'].includes(options.targetKind)) {
+  if (!['capability', 'procedure', 'mcp-tool', 'mcp-operation'].includes(options.targetKind)) {
     throw new HostError('HOST_EVAL_DRIVER_USAGE', '--target-kind is invalid')
   }
   const hasCapability = options.capabilityId !== undefined || options.capabilityVersion !== undefined
   const hasProcedure = options.procedureId !== undefined || options.procedureVersion !== undefined
+  const hasToolName = options.toolName !== undefined
   if (
-    (options.targetKind === 'capability' && (!options.capabilityId || !options.capabilityVersion || hasProcedure)) ||
-    (options.targetKind === 'procedure' && (!options.procedureId || !options.procedureVersion || hasCapability)) ||
-    (options.targetKind === 'mcp-tool' && (hasCapability || hasProcedure))
+    (options.targetKind === 'capability' && (!options.capabilityId || !options.capabilityVersion || hasProcedure || hasToolName)) ||
+    (options.targetKind === 'procedure' && (!options.procedureId || !options.procedureVersion || hasCapability || hasToolName)) ||
+    (options.targetKind === 'mcp-tool' && (hasCapability || hasProcedure || hasToolName)) ||
+    (options.targetKind === 'mcp-operation' && (hasCapability || hasProcedure || !hasToolName))
   ) {
     throw new HostError('HOST_EVAL_DRIVER_USAGE', 'Semantic identity arguments do not match --target-kind')
   }
@@ -65,7 +67,7 @@ async function readRequest() {
     if (bytes > MAX_REQUEST_BYTES) throw new HostError('HOST_INPUT_TOO_LARGE', 'Evaluator request exceeds one MiB')
     chunks.push(chunk)
   }
-  const request = parseStrictJson(Buffer.concat(chunks).toString('utf8'), 'evaluator request')
+  const request = parseStrictJson(decodeUtf8Strict(Buffer.concat(chunks), 'evaluator request'), 'evaluator request')
   const validate = createValidator().compile(await loadBundledSchema('evals-direct-driver-request.schema.json'))
   assertSchema(validate, request, 'HOST_EVAL_REQUEST_INVALID', 'evaluator request')
   return request
@@ -121,6 +123,9 @@ function workTarget(options) {
   }
   if (options.targetKind === 'procedure') {
     return { kind: 'procedure', procedureId: options.procedureId, procedureVersion: options.procedureVersion }
+  }
+  if (options.targetKind === 'mcp-operation') {
+    return { kind: 'mcp-operation', toolName: options.toolName, operationId: options.operationId }
   }
   return { kind: 'mcp-tool', toolName: options.operationId }
 }

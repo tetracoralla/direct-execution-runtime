@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "openadam.procedure-implementation-manifest.v0.4",
+  "schemaVersion": "openadam.procedure-implementation-manifest.v0.5",
   "provider": {
     "id": "test.fake-procedure",
     "name": "Fake Procedure Provider",
@@ -9,6 +9,7 @@
     {
       "procedureId": "org.openadam.test.echo-procedure",
       "procedureVersion": "0.1.0",
+      "profileDigest": "sha256:cf65af4819bb53b4f591fad1027e5396701ec0c90de0fe6a36d85c0f653c1ac1",
       "adapter": {
         "protocol": "openadam.procedure-jsonl.v0.2",
         "command": "node",
