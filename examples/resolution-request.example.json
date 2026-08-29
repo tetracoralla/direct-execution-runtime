@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "openadam.direct-resolution-request.v0.1",
+  "target": {
+    "kind": "capability",
+    "capabilityId": "org.openadam.time.convert",
+    "capabilityVersion": "0.4.0",
+    "operationId": "convert"
+  },
+  "constraints": {
+    "effectAllowance": "read-only",
+    "dataLocality": "local-process",
+    "maxContractSchemaBytes": 65536,
+    "deadlineMs": 10000
+  }
+}

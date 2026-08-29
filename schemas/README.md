@@ -6,9 +6,16 @@ Apache-2.0 license. They fall into two roles.
 ## Runtime-owned schemas
 
 Direct Execution Runtime owns the provider configuration, work order, contract
-selection, host request, host response, host service observation, and
+selection, closed resolution request/result, host request, host response, host service observation, and
 metadata-only execution observation schemas. They describe
 this implementation's host boundary, not a universal Agent or provider ABI.
+The resolution result distinguishes a configured projected-operation envelope
+from an exact operation identity observed in a current live contract.
+JSON Schema is the structural veto only. Consumers that accept a resolution
+result as a JavaScript value must also call the exported
+`validateResolutionResult`, which enforces selection/candidate/request target
+identity, provider/transport alignment, exact and status counts, and result
+precedence. The schema alone cannot express all of those equality relations.
 
 ## Compatibility copies
 

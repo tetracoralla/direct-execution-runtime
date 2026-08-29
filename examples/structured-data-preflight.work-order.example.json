@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "openadam.direct-work-order.v0.1",
+  "id": "structured-data-preflight-example",
+  "calls": [
+    {
+      "id": "preflight-users",
+      "providerId": "org.openadam.structured-data-preflight",
+      "target": {
+        "kind": "procedure",
+        "procedureId": "org.openadam.structured-data.preflight",
+        "procedureVersion": "0.3.0"
+      },
+      "input": {
+        "path": "fixtures/users.json",
+        "sample_rows": 1,
+        "select": "data.users[*]",
+        "validation": {
+          "assertions": [
+            {
+              "id": "has-rows",
+              "type": "row_count",
+              "min": 1
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

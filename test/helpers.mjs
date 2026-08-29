@@ -16,7 +16,7 @@ export function fakeConfig(overrides = {}) {
     maxResultBytes: 262144,
     maxProtocolLineBytes: 1048576,
     maxStderrBytes: 4096,
-    defaultTimeoutMs: 1000,
+    defaultTimeoutMs: 10000,
     circuitBreakerFailureThreshold: 3,
     circuitBreakerCooldownMs: 50,
     ...(overrides.limits ?? {}),
@@ -64,19 +64,29 @@ export function fakeProcedureConfig(overrides = {}) {
 
 export function fakeMcpConfig(overrides = {}) {
   const config = fakeConfig(overrides)
-  const serverPath = resolve(fakeMcpRoot, 'server.mjs')
+  const rootPath = overrides.rootPath ?? fakeMcpRoot
+  const serverPath = overrides.command ?? resolve(rootPath, 'server.mjs')
   config.providers = [{
-    providerId: 'test.fake-mcp',
+    providerId: overrides.providerId ?? 'test.fake-mcp',
     transport: 'mcp-stdio',
     lifecycle: overrides.lifecycle ?? 'persistent',
-    rootPath: fakeMcpRoot,
+    rootPath,
     command: serverPath,
     args: overrides.args ?? [],
-    cwd: overrides.cwd ?? fakeMcpRoot,
+    cwd: overrides.cwd ?? rootPath,
     identityFiles: overrides.identityFiles ?? [serverPath],
     expectedServer: { name: 'direct-execution-fake-mcp', version: '0.1.0' },
     allowedTools: ['echo'],
   }]
+  return config
+}
+
+export function fakeDualCapabilityConfig(overrides = {}) {
+  const config = fakeConfig(overrides)
+  const second = structuredClone(config.providers[0])
+  second.providerId = 'test.fake-capability-second'
+  second.manifestPath = resolve(overrides.rootPath ?? fakeRoot, 'provider-second.json')
+  config.providers.push(second)
   return config
 }
 

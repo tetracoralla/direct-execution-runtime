@@ -13,6 +13,14 @@ generic invocation tool.
 - Contract projection is read-only host introspection after a provider and
   operation are selected. Keep it explicit and typed; never turn it into a
   model-facing execution indirection.
+- Closed resolution may match one exact typed semantic target against explicit
+  local bindings. Keep it config-backed, finite, point-in-time, and mechanical:
+  no prose search, fuzzy match, ranking, winner selection, target invocation,
+  or availability claim from a configured-file projection. A configured MCP
+  projection envelope is not an observed operation identity; an unavailable
+  live contract must remain unknown and must not be counted as an exact
+  operation candidate. Do not widen the v0.1 Socket protocol without an
+  explicit protocol revision.
 - Validate every call against the selected provider-owned live schema or the
   exact schema whose digest is bound by the current Provider Manifest.
 - Preserve provider result and error semantics. Host errors describe only
@@ -25,7 +33,9 @@ generic invocation tool.
   consumer and a separate effect contract.
 - Bound queued plus executing work, whole-order input, provider responses, final
   output, deadlines, stderr, and adapter protocol lines. Cancellation must free
-  admission and replace a poisoned session before recovery is claimed.
+  admission and replace a poisoned session before recovery is claimed. One
+  waiter leaving a shared MCP startup must not poison the startup for remaining
+  waiters; the last abandoned startup waiter must still terminate the child.
 - Do not persist local development checkout paths in tracked product config.
   Real-provider checks may construct temporary development bindings.
 - Generated measurements are review observations under ignored `.verify/`;

@@ -28,15 +28,64 @@ Anchor release.
 ## Maintainer-only local pilot
 
 Dependency Preflight exercises Procedure JSONL and short-lived Capability JSONL
-behavior in the current development workspace. It has no public source or
-installation route in this release and is not advertised as an open-source
-integration.
+behavior in the current development workspace. Structured Data Preflight
+exercises the conditional `org.openadam.structured-data.preflight@0.3.0`
+Procedure over the current File Vitals and BatchTicket Capability adapters.
+Neither Procedure implementation is advertised as an installed or public
+integration of this runtime.
 
-`npm run check:local-pilots` expects these sibling development checkouts and
-also compares bundled compatibility schemas with their current source
-repositories. It is optional maintainer validation, not part of the standalone
-public build or installation path. Generated observations stay in ignored
-`.verify/` and carry no durable correctness, capacity, or savings claim.
+`npm run check:schema-parity` compares bundled compatibility schemas with their
+current sibling source without starting a provider. `npm run check:local-pilots`
+expects the provider sibling development checkouts. Both are optional
+maintainer validation, not part of the standalone public build or installation
+path. Generated observations stay in ignored `.verify/` and carry no durable
+correctness, capacity, or savings claim. When a required provider checkout is
+absent, the local pilot reports that provider route as `not_run` and exits
+incomplete; a successful schema-parity subcheck is not promoted into a
+provider-pilot PASS.
+
+The targeted Structured Data Preflight route is:
+
+```sh
+npm run check:structured-data-procedure
+```
+
+It rebuilds the two Python wheels and the native File Vitals Capability adapter
+from sibling source into a temporary root. A temporary compatibility manifest
+binds the rebuilt `sdp-procedure` entry point while preserving the current
+Procedure identity, Profile digest, exact three stage bindings, and contract
+schema digests. This demonstrates that the Direct Runtime can execute that
+rebuilt provider code for the named cases. The Python entry points still use
+the sibling checkouts' dependency runtimes, so this is not a clean-host
+dependency installation. It does not change the implementation repository's
+tracked development manifest, establish a released installation, or show that
+an Agent or Agent Host selected the route.
+
+## Resolver boundary
+
+The optional config-backed resolver consumes one exact semantic target and
+closed Host constraints. It can return more than one configured provider match,
+but counts a provider as exact only when its current binding exposes that exact
+Capability operation, Procedure, MCP tool, or projected MCP operation. It does
+not enumerate near matches, infer intent, rank providers, or call a target
+operation.
+
+An eligible result means only that the named target and requested contract
+constraints passed the current deterministic projection route. A configured
+Capability or Procedure projection does not start its adapter and therefore
+does not observe execution availability. A live MCP projection observes the
+contract session, not a successful target call. Provider startup and transport
+failures remain `unknown`; they are not converted into semantic rejection.
+For a projected MCP operation, a configured projection-envelope match is
+reported separately and does not count as an exact candidate until the live
+contract exposes that operation identity.
+These point-in-time observations do not establish product quality, domain
+correctness, future health, credentials, adoption, or substitution fitness.
+
+The resolver returns the exact `openadam.direct-contract-selection.v0.1`
+object for each candidate so an Agent or automation can expose only the chosen
+task contract through `project`. Provider-owned contracts and semantics remain
+outside this repository.
 
 ## Adding an integration
 

@@ -15,11 +15,11 @@ The runtime does not replace or patch an Agent shell. The layers stay separate:
 ```text
 Agent shell or automation
         |
-        | creates a typed work order
+        | closes a semantic requirement or creates a typed work order
         v
 Direct Execution Runtime (library, one-shot CLI, or local Unix Socket service)
         |
-        | validates a pinned provider binding and domain schema
+        | resolves exact local candidates or validates a pinned binding and domain schema
         v
 Capability / Procedure / MCP provider
 ```
@@ -41,15 +41,22 @@ The current v0.1 slice supports:
   from either a listed discriminated union or an explicitly bound read-only
   schema lookup tool,
   including declared native-batch item validation;
+- config-backed resolution of one already-closed typed requirement into a
+  finite list of local configured matches and separately counted exact
+  candidates, with point-in-time contract checks and explicit ineligible or
+  unknown outcomes;
 - persistent and per-call provider lifecycles;
 - bounded fair admission, deadlines, cancellation, circuit breaking, session
   replacement, ordered correlation, and partial failure;
 - complete request, provider-response, stderr, protocol-line, and result limits;
+- trap-free ordinary-data snapshots at every JavaScript library boundary,
+  strict fatal UTF-8 decoding and duplicate-key rejection across CLI, Socket,
+  JSONL, and MCP stdio JSON, plus a finite 256-level nesting ceiling;
 - a JavaScript library, one-shot CLI, and current-user-only Unix Socket service;
 - optional owner-local metadata-only execution observations for Agent Tool
   Observer.
 
-It deliberately has no natural-language parser, provider marketplace,
+It deliberately has no natural-language parser, provider registry or marketplace,
 credential store, model-facing generic `invoke` tool, arbitrary workflow
 language, or side-effect authorization layer.
 
@@ -63,8 +70,9 @@ Capability, Procedure, or MCP identifiers.
 
 The current public integration pilots are Math Anchor (deterministic
 mathematics over MCP) and Migratory Time (time-zone conversion over Capability
-JSONL). Dependency Preflight is an unpublished local development pilot, not a
-public dependency or advertised installation route. See
+JSONL). Dependency Preflight and Structured Data Preflight are unpublished
+local development pilots, not public dependencies or advertised installation
+routes. See
 [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) for the exact boundary.
 
 ## Requirements and installation
@@ -115,6 +123,7 @@ One-shot mode starts and closes its own runtime:
 
 ```sh
 openadam-direct-exec inspect --config /absolute/path/providers.local.json
+openadam-direct-exec resolve --config /absolute/path/providers.local.json --requirement resolution.json
 openadam-direct-exec project --config /absolute/path/providers.local.json --selection selection.json
 openadam-direct-exec validate --config /absolute/path/providers.local.json --work-order request.json
 openadam-direct-exec run --config /absolute/path/providers.local.json --work-order request.json
@@ -130,6 +139,42 @@ openadam-direct-exec run \
   --work-order request.json \
   --observation-log "$HOME/Library/Application Support/OpenAdam/Direct Execution Runtime/observations.jsonl"
 ```
+
+`resolve` is optional Host infrastructure for callers that have already chosen
+an exact Capability, Procedure, MCP tool, or projected MCP operation. Its closed
+request can require one contract digest and schema-byte ceiling. It never
+searches by prose, scores provider quality, expands the catalog, or calls the
+selected target operation. It returns only configured target matches, marks and
+counts exact identities separately, and includes the existing `project`
+selection needed for later task-scoped contract exposure.
+For projected MCP operations, a configured projection-envelope match is
+reported separately and becomes exact only after the current live contract
+exposes that operation identity.
+
+For Capability and Procedure JSONL, resolution rechecks the configured contract
+but deliberately does not start the provider process; execution availability is
+therefore `not_observed`. For MCP it starts a bounded contract session and
+reacquires the selected live contract, but does not invoke the selected target;
+that is not a successful-call observation. Startup or transport uncertainty
+stays `unknown`, while exact contract or Host-boundary mismatches are
+`ineligible`. If a projected-operation contract is unavailable, its configured
+envelope remains visible but `semanticIdentity` is `not_observed` and
+`exactCandidates` does not increase. Startup connection loss is returned as a
+retryable Host unavailable observation; connection loss after initialization is
+a retryable Host transport observation. Every result is point-in-time and says
+that reuse requires revalidation. It does not establish business correctness,
+credentials, hidden OS permissions, future availability, or Agent adoption.
+
+Library resolution snapshots the caller's closed request before asynchronous
+projection. Later caller mutation cannot change a returned candidate or
+selection, and caller cancellation terminates the complete resolution instead
+of becoming a provider eligibility result.
+The exported `validateResolutionResult` function applies both the public
+structural schema and runtime-owned cross-field relations: request, candidate,
+selection, provider, counts, exactness, and status precedence must agree.
+
+Resolution is config-backed only in v0.1. The existing Socket protocol remains
+unchanged rather than silently gaining a new action.
 
 ## Persistent local service
 
@@ -181,20 +226,44 @@ generic invoke tool. See `docs/EVALS_DRIVER.md`.
 
 ```sh
 npm run check
+npm run check:schema-parity
 npm run check:local-pilots
+npm run check:structured-data-procedure
 npm run audit:production
 ```
 
 `npm run check` covers source syntax, strict schemas, unit and adversarial
 integration tests, legal inventory drift, repository invariants, and an
-installed-tarball cold/warm service flow. `npm run check:local-pilots` is a
+installed-tarball config-backed resolution plus cold/warm service flow.
+`npm run check:schema-parity` is the separable byte-for-byte comparison of the
+seven bundled compatibility schemas with their sibling development sources.
+`npm run check:local-pilots` is a
 maintainer-only integration check: it uses the current sibling development
 checkouts without modifying them and writes a current-run observation to
 ignored `.verify/`. It is not required to build or use the public repository,
 and its observation is not an SLA or a universal cost-savings claim.
+If a required sibling provider checkout such as Calculator/Math Anchor is
+absent, the command reports the schema comparison separately and exits with
+the provider pilot explicitly `not_run`; it never aggregates that state into a
+PASS.
 Maintainers may explicitly set `OPENADAM_DIRECT_OBSERVATION_LOG` while running
 the local pilot to emit the same privacy-bounded execution events for local
 Agent Tool Observer ingestion; the variable is otherwise inactive.
+
+`npm run check:structured-data-procedure` is the narrower Procedure vertical
+slice. It rebuilds Structured Data Preflight and BatchTicket wheels plus the
+File Vitals Capability adapter into a temporary directory, binds
+`org.openadam.structured-data.preflight@0.3.0`, and checks both completion
+branches, stable failures, mixed partial results, cancellation/recovery, the
+whole-call timeout, the provider-response limit, and current cold/warm direct
+timings. The generated compatibility manifest changes only the concrete
+packaged adapter command; the Procedure identity, Profile digest, stage
+bindings, and result schemas remain the current declarations. Its ignored
+observation is a current development
+measurement, not an installed-host, Agent-adoption, portability, or SLO claim.
+The Python adapter code is imported from those rebuilt wheels, while its
+third-party dependencies still come from the sibling development runtimes;
+this check is not a clean-host dependency installation.
 
 The review boundary and source-release steps are documented in
 `docs/REVIEW_CONTRACT.md` and `docs/RELEASE.md`.

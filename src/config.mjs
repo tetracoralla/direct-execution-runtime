@@ -2,10 +2,77 @@ import { access, constants, readFile, realpath, stat } from 'node:fs/promises'
 import { delimiter, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { HostError } from './errors.mjs'
-import { digestFile, digestJson, parseStrictJson, readStrictJsonFile } from './json.mjs'
+import {
+  decodeUtf8Strict,
+  digestFile,
+  digestJson,
+  parseStrictJson,
+  readStrictJsonFile,
+  snapshotJsonValue,
+} from './json.mjs'
 import { assertSchema, createValidator, loadBundledSchema } from './schema.mjs'
 
 const CONFIG_FILE_LIMIT = 1024 * 1024
+const bindingDeclarations = new WeakMap()
+
+class ReadonlyMapView {
+  #map
+
+  constructor(entries) {
+    this.#map = new Map(entries)
+    Object.freeze(this)
+  }
+
+  get size() { return this.#map.size }
+  get(key) { return this.#map.get(key) }
+  has(key) { return this.#map.has(key) }
+  keys() { return this.#map.keys() }
+  values() { return this.#map.values() }
+  entries() { return this.#map.entries() }
+  [Symbol.iterator]() { return this.#map[Symbol.iterator]() }
+}
+
+Object.freeze(ReadonlyMapView.prototype)
+
+function freezeData(value, seen = new Set()) {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function') || seen.has(value)) return value
+  seen.add(value)
+  if (value instanceof ReadonlyMapView) {
+    for (const item of value.values()) freezeData(item, seen)
+    return value
+  }
+  if (value instanceof Map) return value
+  if (typeof value === 'function') return value
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (descriptor !== undefined && Object.hasOwn(descriptor, 'value')) freezeData(descriptor.value, seen)
+  }
+  return Object.freeze(value)
+}
+
+function readonlyMap(map, transform = (value) => value) {
+  return new ReadonlyMapView([...map].map(([key, value]) => [key, transform(value)]))
+}
+
+function finalizeBinding(binding, declaration) {
+  let finalized = { ...binding }
+  if (binding.operations instanceof Map) {
+    finalized.operations = readonlyMap(binding.operations, (operation) => freezeData({
+      ...operation,
+      errors: operation.errors instanceof Map ? readonlyMap(operation.errors, freezeData) : operation.errors,
+    }))
+  }
+  if (binding.procedureErrors instanceof Map) finalized.procedureErrors = readonlyMap(binding.procedureErrors, freezeData)
+  if (binding.projectionDefinitions instanceof Map) {
+    finalized.projectionDefinitions = readonlyMap(binding.projectionDefinitions, freezeData)
+  }
+  if (binding.batchProjectionDefinitions instanceof Map) {
+    finalized.batchProjectionDefinitions = readonlyMap(binding.batchProjectionDefinitions, freezeData)
+  }
+  finalized = freezeData(finalized)
+  bindingDeclarations.set(finalized, { declaration, limits: binding.limits })
+  return finalized
+}
 
 export const DEFAULT_LIMITS = Object.freeze({
   maxConcurrentCalls: 4,
@@ -119,6 +186,44 @@ async function identityDigests(rootPath, paths, label) {
     })
   }
   return identities.sort((left, right) => left.path.localeCompare(right.path))
+}
+
+async function launchIdentityFiles(rootPath, declaredRootPath, paths, identities, label) {
+  const declaredRoot = resolve(declaredRootPath)
+  const digestsBySource = new Map(
+    identities.map((identity) => [resolve(rootPath, identity.path), identity.digest]),
+  )
+  const launchFiles = []
+  const stagedPaths = new Set()
+  const sourcePaths = new Set()
+  for (const path of paths) {
+    const declaredPath = resolve(path)
+    if (!inside(declaredRoot, declaredPath)) {
+      throw new HostError('HOST_CONFIG_INVALID', `${label} coordinate escapes the declared provider root`)
+    }
+    const stagedPath = relative(declaredRoot, declaredPath) || '.'
+    const sourcePath = await realContainedPath(rootPath, path, label)
+    const digest = digestsBySource.get(sourcePath)
+    if (digest === undefined) throw new HostError('HOST_INTERNAL', `${label} digest was not prepared`)
+    if (stagedPaths.has(stagedPath) || sourcePaths.has(sourcePath)) {
+      throw new HostError('HOST_CONFIG_INVALID', `${label} declarations must identify distinct files`)
+    }
+    stagedPaths.add(stagedPath)
+    sourcePaths.add(sourcePath)
+    launchFiles.push({ path: stagedPath, sourcePath, digest })
+  }
+  return launchFiles.sort((left, right) => left.path.localeCompare(right.path))
+}
+
+async function readContractSchema(path, label) {
+  const body = await readFile(path)
+  if (body.length > CONFIG_FILE_LIMIT) {
+    throw new HostError('HOST_INPUT_TOO_LARGE', `${label} exceeds ${CONFIG_FILE_LIMIT} bytes`)
+  }
+  return {
+    value: parseStrictJson(decodeUtf8Strict(body, label), label),
+    bytes: body.length,
+  }
 }
 
 async function resolveExecutable(command, cwd) {
@@ -297,12 +402,12 @@ async function prepareCapabilityProvider(provider, limits) {
     }
     const inputSchemaPath = await realContainedPath(rootPath, contract.inputSchemaPath, 'input schema')
     const outputSchemaPath = await realContainedPath(rootPath, contract.outputSchemaPath, 'output schema')
-    const [inputText, outputText] = await Promise.all([
-      readFile(inputSchemaPath, 'utf8'),
-      readFile(outputSchemaPath, 'utf8'),
+    const [inputRecord, outputRecord] = await Promise.all([
+      readContractSchema(inputSchemaPath, `${contract.operationId} input schema`),
+      readContractSchema(outputSchemaPath, `${contract.operationId} output schema`),
     ])
-    const inputSchema = parseStrictJson(inputText, `${contract.operationId} input schema`)
-    const outputSchema = parseStrictJson(outputText, `${contract.operationId} output schema`)
+    const inputSchema = inputRecord.value
+    const outputSchema = outputRecord.value
     const [profileInputSchema, profileOutputSchema] = await Promise.all([
       resolveProfileContractSchema(
         profilePath,
@@ -350,7 +455,7 @@ async function prepareCapabilityProvider(provider, limits) {
         input: digestJson(inputSchema),
         output: digestJson(outputSchema),
       },
-      schemaBytes: Buffer.byteLength(inputText) + Buffer.byteLength(outputText),
+      schemaBytes: inputRecord.bytes + outputRecord.bytes,
     })
   }
 
@@ -363,6 +468,13 @@ async function prepareCapabilityProvider(provider, limits) {
   if (!(await stat(cwdPath)).isDirectory()) throw new HostError('HOST_CONFIG_INVALID', 'Capability adapter cwd is not a directory')
   const adapterCommand = await resolveExecutable(implementation.adapter.command, cwdPath)
   const identities = await identityDigests(rootPath, provider.identityFiles, 'Capability identity file')
+  const launchIdentities = await launchIdentityFiles(
+    rootPath,
+    provider.rootPath,
+    provider.identityFiles,
+    identities,
+    'Capability identity file',
+  )
 
   const manifestDigest = digestJson(manifest)
   const commandDigest = await digestFile(adapterCommand)
@@ -390,6 +502,7 @@ async function prepareCapabilityProvider(provider, limits) {
     commandDigest,
     contractDigest,
     identityDigests: identities,
+    launchIdentityFiles: launchIdentities,
     bindingDigest: digestJson({
       providerId: provider.providerId,
       providerVersion: manifest.provider.version,
@@ -397,10 +510,11 @@ async function prepareCapabilityProvider(provider, limits) {
       capabilityVersion: provider.capabilityVersion,
       profileDigest,
       manifestDigest,
+      adapterExecutable: adapterCommand,
       commandDigest,
       adapterArgs,
       adapterCwd: relative(rootPath, cwdPath) || '.',
-      identityFiles: identities,
+      identityFiles: launchIdentities.map(({ path, digest }) => ({ path, digest })),
       contractDigest,
       lifecycle: provider.lifecycle,
       operations: [...operations.keys()].sort(),
@@ -555,12 +669,12 @@ async function prepareProcedureProvider(provider, limits) {
 
   const inputSchemaPath = await realContainedPath(rootPath, provider.inputSchemaPath, 'Procedure input schema')
   const outputSchemaPath = await realContainedPath(rootPath, provider.outputSchemaPath, 'Procedure output schema')
-  const [inputText, outputText] = await Promise.all([
-    readFile(inputSchemaPath, 'utf8'),
-    readFile(outputSchemaPath, 'utf8'),
+  const [inputRecord, outputRecord] = await Promise.all([
+    readContractSchema(inputSchemaPath, 'Procedure input schema'),
+    readContractSchema(outputSchemaPath, 'Procedure output schema'),
   ])
-  const inputSchema = parseStrictJson(inputText, 'Procedure input schema')
-  const outputSchema = parseStrictJson(outputText, 'Procedure output schema')
+  const inputSchema = inputRecord.value
+  const outputSchema = outputRecord.value
   const [profileInputSchema, profileOutputSchema] = await Promise.all([
     resolveProfileContractSchema(profilePath, profile.inputSchema, 'Procedure Profile input schema'),
     resolveProfileContractSchema(profilePath, profile.outputSchema, 'Procedure Profile output schema'),
@@ -587,6 +701,13 @@ async function prepareProcedureProvider(provider, limits) {
   }
   const adapterCommand = await resolveExecutable(implementation.adapter.command, adapterCwd)
   const identities = await identityDigests(rootPath, provider.identityFiles, 'Procedure identity file')
+  const launchIdentities = await launchIdentityFiles(
+    rootPath,
+    provider.rootPath,
+    provider.identityFiles,
+    identities,
+    'Procedure identity file',
+  )
 
   const ajv = createValidator()
   const implementationManifestDigest = digestJson(manifest)
@@ -617,11 +738,12 @@ async function prepareProcedureProvider(provider, limits) {
     validateOutput: ajv.compile(outputSchema),
     inputSchema,
     outputSchema,
-    contractSchemaBytes: Buffer.byteLength(inputText) + Buffer.byteLength(outputText),
+    contractSchemaBytes: inputRecord.bytes + outputRecord.bytes,
     profileDigest,
     implementationManifestDigest,
     commandDigest,
     identityDigests: identities,
+    launchIdentityFiles: launchIdentities,
     contractDigest,
     procedureErrors,
     bindingDigest: digestJson({
@@ -631,10 +753,11 @@ async function prepareProcedureProvider(provider, limits) {
       procedureVersion: provider.procedureVersion,
       profileDigest,
       implementationManifestDigest,
+      adapterExecutable: adapterCommand,
       commandDigest,
       adapterArgs,
       adapterCwd: relative(rootPath, adapterCwd) || '.',
-      identityFiles: identities,
+      identityFiles: launchIdentities.map(({ path, digest }) => ({ path, digest })),
       contractDigest,
       lifecycle: provider.lifecycle,
     }),
@@ -653,6 +776,13 @@ async function prepareMcpProvider(provider, limits) {
   }
   const commandDigest = await digestFile(command)
   const identities = await identityDigests(rootPath, provider.identityFiles, 'MCP identity file')
+  const launchIdentities = await launchIdentityFiles(
+    rootPath,
+    provider.rootPath,
+    provider.identityFiles,
+    identities,
+    'MCP identity file',
+  )
   const projectionDefinitions = new Map()
   const batchProjectionDefinitions = new Map()
   for (const declaration of provider.operationProjections ?? []) {
@@ -705,6 +835,7 @@ async function prepareMcpProvider(provider, limits) {
     cwd,
     commandDigest,
     identityDigests: identities,
+    launchIdentityFiles: launchIdentities,
     projectionDefinitions,
     batchProjectionDefinitions,
     bindingDigest: digestJson({
@@ -714,7 +845,7 @@ async function prepareMcpProvider(provider, limits) {
       command: relative(rootPath, command),
       args: provider.args,
       cwd: relative(rootPath, cwd) || '.',
-      identityFiles: identities,
+      identityFiles: launchIdentities.map(({ path, digest }) => ({ path, digest })),
       lifecycle: provider.lifecycle,
       allowedTools: [...provider.allowedTools].sort(),
       operationProjections,
@@ -723,24 +854,57 @@ async function prepareMcpProvider(provider, limits) {
   }
 }
 
+async function prepareProvider(provider, limits) {
+  return provider.transport === 'capability-jsonl-v0.1'
+    ? await prepareCapabilityProvider(provider, limits)
+    : provider.transport === 'procedure-jsonl-v0.2'
+      ? await prepareProcedureProvider(provider, limits)
+      : await prepareMcpProvider(provider, limits)
+}
+
 export async function prepareRuntimeConfig(value) {
-  assertSchema(await configValidator(), value, 'HOST_CONFIG_INVALID', 'provider configuration')
-  const limits = { ...DEFAULT_LIMITS, ...(value.limits ?? {}) }
+  const snapshot = snapshotJsonValue(value, {
+    code: 'HOST_CONFIG_INVALID',
+    label: 'provider configuration',
+    maxBytes: CONFIG_FILE_LIMIT,
+  })
+  assertSchema(await configValidator(), snapshot, 'HOST_CONFIG_INVALID', 'provider configuration')
+  const limits = freezeData({ ...DEFAULT_LIMITS, ...(snapshot.limits ?? {}) })
   const seen = new Set()
   const providers = new Map()
-  for (const provider of value.providers) {
+  for (const provider of snapshot.providers) {
     if (seen.has(provider.providerId)) {
       throw new HostError('HOST_CONFIG_INVALID', `Duplicate providerId ${provider.providerId}`)
     }
     seen.add(provider.providerId)
-    const prepared = provider.transport === 'capability-jsonl-v0.1'
-      ? await prepareCapabilityProvider(provider, limits)
-      : provider.transport === 'procedure-jsonl-v0.2'
-        ? await prepareProcedureProvider(provider, limits)
-        : await prepareMcpProvider(provider, limits)
-    providers.set(provider.providerId, prepared)
+    const prepared = await prepareProvider(provider, limits)
+    providers.set(provider.providerId, finalizeBinding(prepared, freezeData(provider)))
   }
-  return { schemaVersion: value.schemaVersion, limits, providers }
+  return freezeData({ schemaVersion: snapshot.schemaVersion, limits, providers: readonlyMap(providers) })
+}
+
+export async function revalidatePreparedBinding(binding) {
+  const source = bindingDeclarations.get(binding)
+  if (source === undefined) {
+    throw new HostError('HOST_PROVIDER_REPLACED', 'Provider binding is not owned by this prepared runtime configuration', {
+      retryable: true,
+    })
+  }
+  let current
+  try {
+    current = await prepareProvider(source.declaration, source.limits)
+  } catch (error) {
+    throw new HostError('HOST_PROVIDER_REPLACED', 'Provider execution identity changed after configuration preparation', {
+      cause: error,
+      retryable: true,
+    })
+  }
+  if (current.bindingDigest !== binding.bindingDigest) {
+    throw new HostError('HOST_PROVIDER_REPLACED', 'Provider execution identity changed after configuration preparation', {
+      retryable: true,
+      details: { expectedBindingDigest: binding.bindingDigest, observedBindingDigest: current.bindingDigest },
+    })
+  }
 }
 
 export async function loadRuntimeConfig(path) {

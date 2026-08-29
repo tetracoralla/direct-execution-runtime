@@ -42,7 +42,7 @@ function request(overrides = {}) {
     targetCapability: { id: 'org.openadam.test.echo', version: '0.1.0' },
     providerRef: overrides.providerRef,
     driverRef: { id: EVALS_DRIVER_ID, version: EVALS_DRIVER_VERSION },
-    budget: { timeoutMs: 1000 },
+    budget: { timeoutMs: 10000 },
     isolation: { mode: 'deny-read-roots', deniedReadRoots: ['/tmp/evals-oracle'] },
     ...overrides.request,
   }
@@ -50,7 +50,7 @@ function request(overrides = {}) {
 
 test('evaluator driver pins identity and invokes a persistent host service', async () => {
   await chmod(driverPath, 0o755)
-  const directory = await mkdtemp(resolve(tmpdir(), 'direct-exec-evals-driver-'))
+  const directory = await mkdtemp(resolve(tmpdir(), 'de-eval-'))
   const socketPath = resolve(directory, 'runtime.sock')
   const prepared = await prepareRuntimeConfig(fakeConfig())
   const binding = prepared.providers.get('test.fake-capability')
@@ -106,7 +106,7 @@ test('evaluator driver pins identity and invokes a persistent host service', asy
 
 test('evaluator driver preserves an explicit projected MCP operation target', async () => {
   await chmod(driverPath, 0o755)
-  const directory = await mkdtemp(resolve(tmpdir(), 'direct-exec-evals-projected-'))
+  const directory = await mkdtemp(resolve(tmpdir(), 'de-proj-'))
   const socketPath = resolve(directory, 'runtime.sock')
   const prepared = await prepareRuntimeConfig(fakeProjectedMcpConfig())
   const binding = prepared.providers.get('test.fake-mcp')

@@ -4,7 +4,7 @@ import { platform } from 'node:os'
 import { basename, dirname, isAbsolute, resolve } from 'node:path'
 import { HostError } from './errors.mjs'
 import { assertHostRequest, hostFailure, hostSuccess, HOST_SERVICE_VERSION } from './host-protocol.mjs'
-import { jsonBytes, parseStrictJson } from './json.mjs'
+import { decodeUtf8Strict, jsonBytes, parseStrictJson } from './json.mjs'
 
 const ENVELOPE_ALLOWANCE_BYTES = 64 * 1024
 const DEFAULT_REQUEST_RECEIVE_TIMEOUT_MS = 30_000
@@ -24,6 +24,10 @@ async function secureSocketPath(path) {
   const parent = await realpath(dirname(path)).catch((error) => {
     throw new HostError('HOST_CONFIG_INVALID', 'Host socket directory does not exist', { cause: error })
   })
+  const canonicalPath = resolve(parent, name)
+  if (Buffer.byteLength(canonicalPath) > UNIX_SOCKET_PATH_MAX_BYTES) {
+    throw new HostError('HOST_CONFIG_INVALID', `Canonical host socket path exceeds the ${UNIX_SOCKET_PATH_MAX_BYTES}-byte platform limit`)
+  }
   const parentInfo = await stat(parent)
   if (!parentInfo.isDirectory()) throw new HostError('HOST_CONFIG_INVALID', 'Host socket parent is not a directory')
   if (typeof process.getuid === 'function' && parentInfo.uid !== process.getuid()) {
@@ -32,7 +36,7 @@ async function secureSocketPath(path) {
   if ((parentInfo.mode & 0o077) !== 0) {
     throw new HostError('HOST_CONFIG_INVALID', 'Host socket directory must not be accessible by group or other users')
   }
-  return resolve(parent, name)
+  return canonicalPath
 }
 
 async function liveSocket(path) {
@@ -116,7 +120,7 @@ export class DirectHostService {
     if (this.#server !== undefined) throw new HostError('HOST_SERVICE_IN_USE', 'Host service is already started')
     this.socketPath = await secureSocketPath(this.requestedSocketPath)
     await prepareSocket(this.socketPath, this.replaceStaleSocket)
-    const server = createServer((socket) => this.#accept(socket))
+    const server = createServer({ allowHalfOpen: true }, (socket) => this.#accept(socket))
     server.maxConnections = this.maxConnections
     this.#server = server
     try {
@@ -190,40 +194,46 @@ export class DirectHostService {
 
     socket.on('data', (chunk) => {
       if (responded) return
-      if (processing) {
-        if (chunk.toString('utf8').trim().length !== 0) {
-          controller?.abort()
-          fail(new HostError('HOST_PROTOCOL_ERROR', 'Host service accepts exactly one request per connection'))
-        }
-        return
-      }
       buffer = Buffer.concat([buffer, chunk])
       if (buffer.length > this.requestLimit) {
         fail(new HostError('HOST_INPUT_TOO_LARGE', 'Host service request exceeds its complete envelope limit'))
-        return
       }
-      const newline = buffer.indexOf(0x0a)
-      if (newline === -1) return
+    })
+    socket.once('end', () => {
+      if (responded || processing) return
       processing = true
       socket.setTimeout(0)
-      const trailing = buffer.subarray(newline + 1).toString('utf8').trim()
-      if (trailing.length !== 0) {
-        fail(new HostError('HOST_PROTOCOL_ERROR', 'Host service accepts exactly one request per connection'))
+      const newline = buffer.indexOf(0x0a)
+      if (newline === -1) {
+        fail(new HostError('HOST_PROTOCOL_ERROR', 'Host service request ended without one complete JSON line'))
+        return
+      }
+      try {
+        if (newline !== buffer.length - 1) {
+          decodeUtf8Strict(buffer.subarray(newline + 1), 'host request trailing bytes')
+          fail(new HostError('HOST_PROTOCOL_ERROR', 'Host service accepts exactly one request per connection'))
+          return
+        }
+      } catch (error) {
+        fail(error)
         return
       }
       void (async () => {
         try {
-          const request = parseStrictJson(buffer.subarray(0, newline).toString('utf8'), 'host request')
+          const request = parseStrictJson(
+            decodeUtf8Strict(buffer.subarray(0, newline), 'host request'),
+            'host request',
+          )
           if (typeof request?.id === 'string') requestId = request.id
           assertHostRequest(request, this.requestLimit)
           controller = new AbortController()
           this.#controllers.add(controller)
           const result = request.action === 'inspect'
-            ? await this.runtime.inspectBindings()
+            ? await this.runtime.inspectBindings({ signal: controller.signal })
             : request.action === 'project'
-              ? await this.runtime.projectContract(request.selection)
+              ? await this.runtime.projectContract(request.selection, { signal: controller.signal })
             : request.action === 'validate'
-              ? await this.runtime.validateWorkOrder(request.workOrder)
+              ? await this.runtime.validateWorkOrder(request.workOrder, { signal: controller.signal })
               : await this.runtime.runWorkOrder(request.workOrder, { signal: controller.signal })
           respond(hostSuccess(request.id, result))
         } catch (error) {

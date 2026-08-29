@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import Ajv2020 from 'ajv/dist/2020.js'
+import addFormats from 'ajv-formats'
 import { fileURLToPath } from 'node:url'
 import { parseStrictJson } from '../src/json.mjs'
 
@@ -25,7 +26,9 @@ const allFiles = await files(root)
 for (const required of [
   'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'CONTRIBUTING.md',
   'README.md', 'docs/INTEGRATIONS.md', 'docs/PUBLIC_DEMO.md',
-  'examples/demo-math-anchor.mjs', 'examples/contract-selection.example.json', 'schemas/README.md',
+  'examples/demo-math-anchor.mjs', 'examples/contract-selection.example.json',
+  'examples/resolution-request.example.json',
+  'examples/structured-data-preflight.work-order.example.json', 'schemas/README.md',
   '.github/workflows/ci.yml', '.github/workflows/codeql.yml', '.github/dependabot.yml',
 ]) {
   if (!allFiles.includes(resolve(root, required))) throw new Error(`public repository file is absent: ${required}`)
@@ -47,7 +50,11 @@ if (
 ) {
   throw new Error('public repository metadata must identify tetracoralla/direct-execution-runtime')
 }
-if (packageJson.scripts?.['check:providers'] || !packageJson.scripts?.['check:local-pilots']) {
+if (
+  packageJson.scripts?.['check:providers'] ||
+  packageJson.scripts?.['check:schema-parity'] !== 'node scripts/check-schema-parity.mjs' ||
+  !packageJson.scripts?.['check:local-pilots']
+) {
   throw new Error('sibling-provider validation must be exposed only as the maintainer-local pilot check')
 }
 if (
@@ -103,15 +110,31 @@ for (const match of workflowText.matchAll(/\buses:\s+[^\s@]+@([^\s#]+)/gu)) {
 }
 
 const ajv = new Ajv2020({ allErrors: true, strict: false })
+addFormats(ajv)
 const providerSchema = parseStrictJson(await readFile(resolve(root, 'schemas/provider-config.schema.json'), 'utf8'))
 const workOrderSchema = parseStrictJson(await readFile(resolve(root, 'schemas/work-order.schema.json'), 'utf8'))
 const contractSelectionSchema = parseStrictJson(await readFile(resolve(root, 'schemas/contract-selection.schema.json'), 'utf8'))
+const resolutionRequestSchema = parseStrictJson(await readFile(resolve(root, 'schemas/resolution-request.schema.json'), 'utf8'))
+const resolutionResultSchema = parseStrictJson(await readFile(resolve(root, 'schemas/resolution-result.schema.json'), 'utf8'))
 const exampleConfig = parseStrictJson(await readFile(resolve(root, 'examples/provider-config.example.json'), 'utf8'))
 const exampleOrder = parseStrictJson(await readFile(resolve(root, 'examples/work-order.example.json'), 'utf8'))
+const structuredDataProcedureOrder = parseStrictJson(
+  await readFile(resolve(root, 'examples/structured-data-preflight.work-order.example.json'), 'utf8'),
+)
 const exampleSelection = parseStrictJson(await readFile(resolve(root, 'examples/contract-selection.example.json'), 'utf8'))
+const exampleResolutionRequest = parseStrictJson(
+  await readFile(resolve(root, 'examples/resolution-request.example.json'), 'utf8'),
+)
 if (!ajv.compile(providerSchema)(exampleConfig)) throw new Error('provider config example does not satisfy its schema')
 if (!ajv.compile(workOrderSchema)(exampleOrder)) throw new Error('work-order example does not satisfy its schema')
+if (!ajv.compile(workOrderSchema)(structuredDataProcedureOrder)) {
+  throw new Error('Structured Data Preflight work-order example does not satisfy its schema')
+}
 if (!ajv.compile(contractSelectionSchema)(exampleSelection)) throw new Error('contract-selection example does not satisfy its schema')
+if (!ajv.compile(resolutionRequestSchema)(exampleResolutionRequest)) {
+  throw new Error('resolution-request example does not satisfy its schema')
+}
+ajv.compile(resolutionResultSchema)
 
 const cli = resolve(root, 'src/cli.mjs')
 if (((await stat(cli)).mode & 0o111) === 0) throw new Error('CLI entry point is not executable')

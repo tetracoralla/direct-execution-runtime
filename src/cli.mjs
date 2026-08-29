@@ -5,13 +5,14 @@ import { loadRuntimeConfig } from './config.mjs'
 import { hostErrorPayload, HostError } from './errors.mjs'
 import { requestDirectHost, MAX_HOST_CLIENT_REQUEST_BYTES } from './host-client.mjs'
 import { DirectHostService } from './host-service.mjs'
-import { parseStrictJson, readStrictJsonFile } from './json.mjs'
+import { decodeUtf8Strict, parseStrictJson, readStrictJsonFile } from './json.mjs'
 import { DirectExecutionRuntime } from './runtime.mjs'
 import { JsonlObservationSink } from './observations.mjs'
 
 function usage() {
   return `Usage:
   openadam-direct-exec inspect (--config PATH | --socket PATH) [--pretty]
+  openadam-direct-exec resolve --config PATH --requirement PATH|- [--pretty]
   openadam-direct-exec project (--config PATH | --socket PATH) --selection PATH|- [--pretty]
   openadam-direct-exec validate (--config PATH | --socket PATH) --work-order PATH|- [--pretty]
   openadam-direct-exec run --config PATH --work-order PATH|- [--observation-log PATH] [--pretty]
@@ -21,7 +22,7 @@ function usage() {
 
 function parseArguments(argv) {
   const [command, ...rest] = argv
-  if (!['inspect', 'project', 'validate', 'run', 'serve'].includes(command)) {
+  if (!['inspect', 'resolve', 'project', 'validate', 'run', 'serve'].includes(command)) {
     throw new HostError('HOST_CLI_USAGE', usage())
   }
   const options = { command, pretty: false, replaceStaleSocket: false }
@@ -36,7 +37,7 @@ function parseArguments(argv) {
       options.replaceStaleSocket = true
       continue
     }
-    if (['--config', '--socket', '--work-order', '--selection', '--max-connections', '--observation-log'].includes(argument)) {
+    if (['--config', '--socket', '--work-order', '--selection', '--requirement', '--max-connections', '--observation-log'].includes(argument)) {
       const value = rest[index + 1]
       if (value === undefined || value.startsWith('--')) throw new HostError('HOST_CLI_USAGE', `${argument} requires a value`)
       const key = {
@@ -44,6 +45,7 @@ function parseArguments(argv) {
         '--socket': 'socket',
         '--work-order': 'workOrder',
         '--selection': 'selection',
+        '--requirement': 'requirement',
         '--max-connections': 'maxConnections',
         '--observation-log': 'observationLog',
       }[argument]
@@ -59,13 +61,16 @@ function parseArguments(argv) {
     if (options.config === undefined || options.socket === undefined) {
       throw new HostError('HOST_CLI_USAGE', 'serve requires both --config and --socket')
     }
-    if (options.workOrder !== undefined || options.selection !== undefined) {
-      throw new HostError('HOST_CLI_USAGE', '--work-order and --selection do not apply to serve')
+    if (options.workOrder !== undefined || options.selection !== undefined || options.requirement !== undefined) {
+      throw new HostError('HOST_CLI_USAGE', '--work-order, --selection, and --requirement do not apply to serve')
     }
     return options
   }
   if ((options.config === undefined) === (options.socket === undefined)) {
     throw new HostError('HOST_CLI_USAGE', `${command} requires exactly one of --config or --socket`)
+  }
+  if (command === 'resolve' && options.socket !== undefined) {
+    throw new HostError('HOST_CLI_USAGE', 'resolve is a config-backed v0.1 operation and does not use the v0.1 Socket protocol')
   }
   if (options.socket !== undefined && options.observationLog !== undefined) {
     throw new HostError('HOST_CLI_USAGE', '--observation-log is configured by the serving runtime, not a socket client')
@@ -77,16 +82,24 @@ function parseArguments(argv) {
     throw new HostError('HOST_CLI_USAGE', '--replace-stale-socket and --max-connections apply only to serve')
   }
   if (command === 'project') {
-    if (options.selection === undefined || options.workOrder !== undefined) {
-      throw new HostError('HOST_CLI_USAGE', 'project requires --selection and does not accept --work-order')
+    if (options.selection === undefined || options.workOrder !== undefined || options.requirement !== undefined) {
+      throw new HostError('HOST_CLI_USAGE', 'project requires --selection and does not accept --work-order or --requirement')
     }
   } else if (options.selection !== undefined) {
     throw new HostError('HOST_CLI_USAGE', '--selection applies only to project')
-  } else if (!['inspect'].includes(command) && options.workOrder === undefined) {
-    throw new HostError('HOST_CLI_USAGE', '--work-order is required')
   }
-  if (command === 'inspect' && options.workOrder !== undefined) {
-    throw new HostError('HOST_CLI_USAGE', '--work-order does not apply to inspect')
+  if (command === 'resolve') {
+    if (options.requirement === undefined || options.workOrder !== undefined) {
+      throw new HostError('HOST_CLI_USAGE', 'resolve requires --requirement and does not accept --work-order')
+    }
+  } else if (options.requirement !== undefined) {
+    throw new HostError('HOST_CLI_USAGE', '--requirement applies only to resolve')
+  }
+  if (['validate', 'run'].includes(command) && options.workOrder === undefined) {
+    throw new HostError('HOST_CLI_USAGE', `${command} requires --work-order`)
+  }
+  if (['inspect', 'resolve', 'project'].includes(command) && options.workOrder !== undefined) {
+    throw new HostError('HOST_CLI_USAGE', `--work-order does not apply to ${command}`)
   }
   return options
 }
@@ -96,10 +109,10 @@ async function readStdinBounded(limit) {
   let bytes = 0
   for await (const chunk of process.stdin) {
     bytes += chunk.length
-    if (bytes > limit) throw new HostError('HOST_INPUT_TOO_LARGE', `stdin work order exceeds ${limit} bytes`)
+    if (bytes > limit) throw new HostError('HOST_INPUT_TOO_LARGE', `stdin input exceeds ${limit} bytes`)
     chunks.push(chunk)
   }
-  return Buffer.concat(chunks).toString('utf8')
+  return decodeUtf8Strict(Buffer.concat(chunks), 'stdin input')
 }
 
 async function readJsonInput(path, limit, label) {
@@ -178,6 +191,15 @@ async function main() {
     })
     if (options.command === 'inspect') {
       print(await runtime.inspectBindings(), options.pretty)
+      return
+    }
+    if (options.command === 'resolve') {
+      const requirement = await readJsonInput(
+        options.requirement,
+        config.limits.maxWorkOrderBytes,
+        'resolution request',
+      )
+      print(await runtime.resolveBindings(requirement, { signal: controller.signal }), options.pretty)
       return
     }
     if (options.command === 'project') {

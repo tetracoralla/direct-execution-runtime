@@ -3,8 +3,15 @@ import { resolve } from 'node:path'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Ajv2020 from 'ajv/dist/2020.js'
-import { assertHostRequest, assertHostResponse, hostFailure, hostSuccess, HOST_REQUEST_VERSION } from '../src/host-protocol.mjs'
-import { parseStrictJson } from '../src/json.mjs'
+import {
+  assertHostRequest,
+  assertHostResponse,
+  hostFailure,
+  hostSuccess,
+  HOST_REQUEST_VERSION,
+  HOST_RESPONSE_VERSION,
+} from '../src/host-protocol.mjs'
+import { jsonBytes, parseStrictJson } from '../src/json.mjs'
 import { repositoryRoot, workOrder, fakeCall } from './helpers.mjs'
 
 async function schema(name) {
@@ -57,6 +64,47 @@ test('host carrier rejects unknown fields and mismatched response identity', () 
   )
   assert.throws(
     () => assertHostResponse(hostSuccess('actual', { status: 'ok' }), 'expected', 1024),
+    (error) => error.code === 'HOST_PROTOCOL_ERROR',
+  )
+  const extraErrorField = hostFailure('expected', new Error('failed'))
+  extraErrorField.error.extra = true
+  assert.throws(
+    () => assertHostResponse(extraErrorField, 'expected', 4096),
+    (error) => error.code === 'HOST_PROTOCOL_ERROR',
+  )
+  const oversizedMessage = hostFailure('expected', new Error('failed'))
+  oversizedMessage.error.message = 'x'.repeat(1004)
+  assert.throws(
+    () => assertHostResponse(oversizedMessage, 'expected', 4096),
+    (error) => error.code === 'HOST_PROTOCOL_ERROR',
+  )
+})
+
+test('host error message length uses JSON Schema Unicode code points while envelope limits remain UTF-8 bytes', async () => {
+  const validateResponse = new Ajv2020({ allErrors: true, strict: false })
+    .compile(await schema('host-response.schema.json'))
+  const accepted = {
+    schemaVersion: HOST_RESPONSE_VERSION,
+    id: 'unicode-message',
+    status: 'host_error',
+    error: {
+      code: 'HOST_INTERNAL',
+      message: '🧩'.repeat(600),
+      retryable: false,
+    },
+  }
+  assert.equal(validateResponse(accepted), true, JSON.stringify(validateResponse.errors))
+  assert.equal(assertHostResponse(accepted, accepted.id, jsonBytes(accepted)), accepted)
+  assert.throws(
+    () => assertHostResponse(accepted, accepted.id, jsonBytes(accepted) - 1),
+    (error) => error.code === 'HOST_PROVIDER_RESPONSE_TOO_LARGE',
+  )
+
+  const rejected = structuredClone(accepted)
+  rejected.error.message = '🧩'.repeat(1004)
+  assert.equal(validateResponse(rejected), false)
+  assert.throws(
+    () => assertHostResponse(rejected, rejected.id, jsonBytes(rejected)),
     (error) => error.code === 'HOST_PROTOCOL_ERROR',
   )
 })

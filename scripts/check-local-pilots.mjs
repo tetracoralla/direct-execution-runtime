@@ -12,6 +12,7 @@ import { DirectHostService } from '../src/host-service.mjs'
 import { jsonBytes } from '../src/json.mjs'
 import { DirectExecutionRuntime } from '../src/runtime.mjs'
 import { JsonlObservationSink } from '../src/observations.mjs'
+import { checkSchemaParity } from './check-schema-parity.mjs'
 
 const execFileAsync = promisify(execFile)
 const root = fileURLToPath(new URL('../', import.meta.url))
@@ -55,8 +56,6 @@ function projectVersion(projectToml) {
   return match[1]
 }
 
-const mathAnchorVersion = projectVersion(await readFile(resolve(calculatorRoot, 'pyproject.toml'), 'utf8'))
-
 function waitForJsonLine(child, timeoutMs = 15_000) {
   return new Promise((resolvePromise, reject) => {
     let stdout = ''
@@ -90,41 +89,21 @@ function waitForJsonLine(child, timeoutMs = 15_000) {
   })
 }
 
-for (const { bundledName, canonicalPath } of [
-  {
-    bundledName: 'capability-profile.schema.v0.3.json',
-    canonicalPath: resolve(workspace, 'capability-contracts/schemas/capability-profile.schema.v0.3.json'),
-  },
-  {
-    bundledName: 'capability-jsonl-envelope.schema.v0.1.json',
-    canonicalPath: resolve(workspace, 'capability-contracts/schemas/capability-jsonl-envelope.schema.v0.1.json'),
-  },
-  {
-    bundledName: 'provider-manifest.schema.v0.3.json',
-    canonicalPath: resolve(workspace, 'capability-contracts/schemas/provider-manifest.schema.v0.3.json'),
-  },
-  {
-    bundledName: 'procedure-profile.schema.v0.5.json',
-    canonicalPath: resolve(workspace, 'procedure-contracts/schemas/procedure-profile.schema.v0.5.json'),
-  },
-  {
-    bundledName: 'procedure-implementation-manifest.schema.v0.5.json',
-    canonicalPath: resolve(workspace, 'procedure-contracts/schemas/procedure-implementation-manifest.schema.v0.5.json'),
-  },
-  {
-    bundledName: 'evals-direct-driver-request.schema.json',
-    canonicalPath: resolve(workspace, 'agent-tool-evals/schemas/direct-driver-request.schema.json'),
-  },
-  {
-    bundledName: 'evals-direct-driver-result.schema.json',
-    canonicalPath: resolve(workspace, 'agent-tool-evals/schemas/direct-driver-result.schema.json'),
-  },
-]) {
-  const [bundled, canonical] = await Promise.all([
-    readFile(resolve(root, 'schemas', bundledName)),
-    readFile(canonicalPath),
-  ])
-  if (!bundled.equals(canonical)) throw new Error(`Bundled standard schema drift: ${bundledName}`)
+const schemaParity = await checkSchemaParity()
+let mathAnchorVersion
+try {
+  mathAnchorVersion = projectVersion(await readFile(resolve(calculatorRoot, 'pyproject.toml'), 'utf8'))
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error
+  process.stdout.write(`${JSON.stringify({
+    status: 'incomplete',
+    schemaParity,
+    providerPilot: {
+      status: 'not_run',
+      reason: 'calculator checkout is unavailable',
+    },
+  })}\n`)
+  process.exit(2)
 }
 
 const limits = {

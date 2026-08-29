@@ -10,7 +10,8 @@ settings.
    with the maintainer pilot providers, `npm run check:local-pilots`.
 3. Inspect `npm pack --json` and install the tarball in an empty directory.
    `npm run check:package` performs this mechanically, including the persistent
-   service cold/warm route and clean shutdown.
+   service cold/warm route, config-backed exact resolution without target
+   execution, and clean shutdown.
 4. Confirm `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, `SECURITY.md`, and the
    README are present in both source and package surfaces.
 5. Review the actual Git history for secrets, personal data, generated output,

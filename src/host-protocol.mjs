@@ -17,6 +17,10 @@ function exactKeys(value, allowed) {
   return Object.keys(value).every((key) => allowed.has(key))
 }
 
+function unicodeCodePoints(value) {
+  return [...value].length
+}
+
 export function assertHostRequest(request, maxBytes) {
   if (!ordinaryObject(request)) throw new HostError('HOST_PROTOCOL_ERROR', 'Host request must be an object')
   if (jsonBytes(request) > maxBytes) throw new HostError('HOST_INPUT_TOO_LARGE', 'Host request exceeds the service byte limit')
@@ -79,9 +83,18 @@ export function assertHostResponse(response, expectedId, maxBytes) {
       throw new HostError('HOST_PROTOCOL_ERROR', 'Host error response is invalid')
     }
     const error = response.error
+    const errorFields = Object.keys(error)
+    if (
+      !exactKeys(error, new Set(['code', 'message', 'retryable', 'details'])) ||
+      !['code', 'message', 'retryable'].every((field) => Object.hasOwn(error, field)) ||
+      ![3, 4].includes(errorFields.length)
+    ) {
+      throw new HostError('HOST_PROTOCOL_ERROR', 'Host error payload fields are invalid')
+    }
     if (
       typeof error.code !== 'string' || !/^[A-Z][A-Z0-9_]{0,99}$/u.test(error.code) ||
-      typeof error.message !== 'string' || error.message.length === 0 ||
+      typeof error.message !== 'string' || unicodeCodePoints(error.message) === 0 ||
+      unicodeCodePoints(error.message) > 1003 ||
       typeof error.retryable !== 'boolean'
     ) {
       throw new HostError('HOST_PROTOCOL_ERROR', 'Host error payload is invalid')

@@ -1,9 +1,12 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { revalidatePreparedBinding } from '../config.mjs'
 import { boundedMessage, HostError } from '../errors.mjs'
-import { digestJson, jsonBytes } from '../json.mjs'
+import { digestJson, jsonBytes, snapshotJsonValue } from '../json.mjs'
+import { createLaunchSnapshot } from '../launch-snapshot.mjs'
 import { prepareMcpOperationProjection, projectMcpOperation } from '../operation-projection.mjs'
 import { assertSchema, createValidator } from '../schema.mjs'
+import { StrictMcpStdioTransport } from '../strict-mcp-stdio-transport.mjs'
 
 function safeAnnotations(tool) {
   const annotations = tool.annotations ?? {}
@@ -49,6 +52,15 @@ async function awaitWithDeadline(promise, { signal, deadlineAt } = {}) {
   })
 }
 
+async function awaitCancelledStartup(starting) {
+  if (starting === undefined) return
+  try {
+    await starting
+  } catch (error) {
+    if (error?.code === 'HOST_CLEANUP_FAILED') throw error
+  }
+}
+
 function pidExists(pid) {
   if (!Number.isInteger(pid)) return false
   try {
@@ -58,6 +70,8 @@ function pidExists(pid) {
     return error?.code === 'EPERM'
   }
 }
+
+const MAX_TOOL_CATALOG_PAGES = 1024
 
 async function waitForPidExit(pid, timeoutMs = 1000) {
   const deadline = Date.now() + timeoutMs
@@ -81,6 +95,8 @@ export class McpSession {
   #contractDigest
   #fatalError
   #closing
+  #startupWaiters = 0
+  #launchSnapshot
 
   constructor(binding) {
     this.binding = binding
@@ -95,39 +111,51 @@ export class McpSession {
   }
 
   async ensureStarted(options = {}) {
-    if (this.#starting !== undefined) {
-      try {
-        await awaitWithDeadline(this.#starting, options)
-      } catch (error) {
-        if (error?.code === 'HOST_TIMEOUT' || error?.code === 'HOST_CANCELLED') await this.close()
-        throw error
-      }
-      return { sessionState: 'cold' }
+    let starting = this.#starting
+    if (starting === undefined) {
+      if (this.#client !== undefined) return { sessionState: 'warm' }
+      starting = (async () => {
+        await revalidatePreparedBinding(this.binding)
+        if (this.#starting !== starting) {
+          throw new HostError('HOST_PROVIDER_REPLACED', 'MCP session startup was replaced', { retryable: true })
+        }
+        await this.#start(starting)
+      })()
+      this.#starting = starting
+      starting.then(
+        () => { if (this.#starting === starting) this.#starting = undefined },
+        () => { if (this.#starting === starting) this.#starting = undefined },
+      )
     }
-    if (this.#client !== undefined) return { sessionState: 'warm' }
-    const starting = this.#start()
-    this.#starting = starting
-    starting.then(
-      () => { if (this.#starting === starting) this.#starting = undefined },
-      () => { if (this.#starting === starting) this.#starting = undefined },
-    )
+    this.#startupWaiters += 1
+    let abandoned = false
     try {
       await awaitWithDeadline(starting, options)
     } catch (error) {
-      if (error?.code === 'HOST_TIMEOUT' || error?.code === 'HOST_CANCELLED') await this.close()
+      abandoned = error?.code === 'HOST_TIMEOUT' || error?.code === 'HOST_CANCELLED'
       throw error
+    } finally {
+      this.#startupWaiters -= 1
+      if (abandoned && this.#starting === starting && this.#startupWaiters === 0) await this.close()
     }
     return { sessionState: 'cold' }
   }
 
-  async #start() {
+  async #start(starting) {
     this.#stderr = Buffer.alloc(0)
     this.#fatalError = undefined
     this.#contractDigest = undefined
-    const transport = new StdioClientTransport({
-      command: this.binding.command,
-      args: this.binding.args,
-      cwd: this.binding.cwd,
+    const launchSnapshot = await createLaunchSnapshot(this.binding)
+    if (this.#starting !== starting) {
+      await this.#releaseLaunchSnapshot(launchSnapshot)
+      throw new HostError('HOST_PROVIDER_REPLACED', 'MCP session startup was replaced', { retryable: true })
+    }
+    this.#launchSnapshot = launchSnapshot
+    const transport = new StrictMcpStdioTransport({
+      command: launchSnapshot.command,
+      args: launchSnapshot.args,
+      cwd: launchSnapshot.cwd,
+      env: launchSnapshot.prepareEnvironment(getDefaultEnvironment()),
       stderr: 'pipe',
       maxBufferSize: this.binding.limits.maxProviderResponseBytes,
     })
@@ -145,30 +173,66 @@ export class McpSession {
       }
     })
     const client = new Client({ name: 'openadam-direct-execution-runtime', version: '0.1.0' })
+    let connected = false
     try {
       await client.connect(transport, {
         timeout: this.binding.limits.defaultTimeoutMs,
         maxTotalTimeout: this.binding.limits.defaultTimeoutMs,
       })
-      const serverVersion = client.getServerVersion()
+      connected = true
+      const serverVersion = snapshotJsonValue(client.getServerVersion(), {
+        code: 'HOST_BINDING_INVALID',
+        label: 'MCP server identity',
+      })
       if (
         serverVersion?.name !== this.binding.expectedServer.name ||
         serverVersion?.version !== this.binding.expectedServer.version
       ) {
         throw new HostError('HOST_BINDING_INVALID', 'Live MCP server identity does not match the configured expected server')
       }
-      const listed = await client.listTools(undefined, {
-        timeout: this.binding.limits.defaultTimeoutMs,
-        maxTotalTimeout: this.binding.limits.defaultTimeoutMs,
-      })
-      this.#catalogBytes = jsonBytes(listed)
-      if (this.#catalogBytes > this.binding.limits.maxProviderResponseBytes) {
-        throw new HostError('HOST_PROVIDER_RESPONSE_TOO_LARGE', 'MCP tools listing exceeds the configured byte limit')
+      const catalogTools = []
+      const missingTools = new Set(this.binding.allowedTools)
+      const seenCursors = new Set()
+      let catalogBytes = 0
+      let cursor
+      let catalogTerminated = false
+      for (let page = 0; page < MAX_TOOL_CATALOG_PAGES; page += 1) {
+        const listed = snapshotJsonValue(
+          await client.listTools(cursor === undefined ? undefined : { cursor }, {
+            timeout: this.binding.limits.defaultTimeoutMs,
+            maxTotalTimeout: this.binding.limits.defaultTimeoutMs,
+          }),
+          { code: 'HOST_BINDING_INVALID', label: 'MCP tool catalog page' },
+        )
+        catalogBytes += jsonBytes({ tools: listed.tools })
+        if (catalogBytes > this.binding.limits.maxProviderResponseBytes) {
+          throw new HostError('HOST_PROVIDER_RESPONSE_TOO_LARGE', 'MCP tools listing exceeds the configured byte limit')
+        }
+        for (const tool of listed.tools) {
+          catalogTools.push(tool)
+          missingTools.delete(tool.name)
+        }
+        if (listed.nextCursor === undefined || missingTools.size === 0) {
+          catalogTerminated = true
+          break
+        }
+        if (
+          typeof listed.nextCursor !== 'string' || listed.nextCursor.length === 0 ||
+          seenCursors.has(listed.nextCursor)
+        ) {
+          throw new HostError('HOST_BINDING_INVALID', 'MCP tool catalog pagination did not advance')
+        }
+        seenCursors.add(listed.nextCursor)
+        cursor = listed.nextCursor
       }
+      if (!catalogTerminated) {
+        throw new HostError('HOST_BINDING_INVALID', 'MCP tool catalog pagination exceeded its page limit')
+      }
+      this.#catalogBytes = catalogBytes
       const selected = new Map()
       const ajv = createValidator()
       for (const name of this.binding.allowedTools) {
-        const tool = listed.tools.find((candidate) => candidate.name === name)
+        const tool = catalogTools.find((candidate) => candidate.name === name)
         if (tool === undefined) throw new HostError('HOST_BINDING_INVALID', `Allowed MCP tool ${name} is absent from the live server`)
         if (!safeAnnotations(tool)) {
           throw new HostError('HOST_BINDING_UNSAFE', `MCP tool ${name} is outside the direct read-only execution boundary`)
@@ -233,6 +297,7 @@ export class McpSession {
       this.#contractAcquiredAt = new Date().toISOString()
       this.#lastResponseAt = undefined
     } catch (error) {
+      const replaced = this.#transport !== transport
       const pid = transport.pid
       let cleanupError
       try {
@@ -244,8 +309,31 @@ export class McpSession {
         cleanupError = new HostError('HOST_CLEANUP_FAILED', 'MCP provider process remained after failed startup')
       }
       if (this.#transport === transport) this.#transport = undefined
+      await this.#releaseLaunchSnapshot(launchSnapshot)
       if (cleanupError !== undefined) throw cleanupError
-      throw this.#fatalError ?? error
+      if (this.#fatalError !== undefined) throw this.#fatalError
+      if (error instanceof HostError) throw error
+      if (replaced) {
+        throw new HostError('HOST_PROVIDER_REPLACED', 'MCP session was replaced during startup', {
+          cause: error,
+          retryable: true,
+        })
+      }
+      throw new HostError(
+        connected ? 'HOST_TRANSPORT_ERROR' : 'HOST_PROVIDER_UNAVAILABLE',
+        boundedMessage(error instanceof Error ? error.message : String(error)),
+        { cause: error, retryable: true },
+      )
+    }
+  }
+
+  async #releaseLaunchSnapshot(snapshot) {
+    if (snapshot === undefined) return
+    if (this.#launchSnapshot === snapshot) this.#launchSnapshot = undefined
+    try {
+      await snapshot.dispose()
+    } catch (error) {
+      throw new HostError('HOST_CLEANUP_FAILED', 'MCP provider launch snapshot was not removed', { cause: error })
     }
   }
 
@@ -327,10 +415,13 @@ export class McpSession {
     if (remaining <= 0) throw new HostError('HOST_TIMEOUT', 'Call deadline expired before MCP schema lookup')
     let response
     try {
-      response = await this.#client.callTool(
-        { name: declaration.toolName, arguments: input },
-        undefined,
-        { signal: options.signal, timeout: remaining, maxTotalTimeout: remaining },
+      response = snapshotJsonValue(
+        await this.#client.callTool(
+          { name: declaration.toolName, arguments: input },
+          undefined,
+          { signal: options.signal, timeout: remaining, maxTotalTimeout: remaining },
+        ),
+        { code: 'HOST_PROVIDER_PROTOCOL_ERROR', label: 'MCP schema lookup response' },
       )
     } catch (error) {
       const cancelled = options.signal?.aborted === true
@@ -421,10 +512,13 @@ export class McpSession {
     const started = performance.now()
     let response
     try {
-      response = await this.#client.callTool(
-        { name: call.target.toolName, arguments: call.input },
-        undefined,
-        { signal, timeout: remaining, maxTotalTimeout: remaining },
+      response = snapshotJsonValue(
+        await this.#client.callTool(
+          { name: call.target.toolName, arguments: call.input },
+          undefined,
+          { signal, timeout: remaining, maxTotalTimeout: remaining },
+        ),
+        { code: 'HOST_PROVIDER_PROTOCOL_ERROR', label: 'MCP tool response' },
       )
     } catch (error) {
       const cancelled = signal?.aborted === true
@@ -511,25 +605,43 @@ export class McpSession {
   }
 
   async #closeOwned() {
+    const starting = this.#starting
+    this.#starting = undefined
     const client = this.#client
     const transport = this.#transport
+    const launchSnapshot = this.#launchSnapshot
     const pid = transport?.pid ?? null
     this.#client = undefined
     this.#transport = undefined
+    this.#launchSnapshot = undefined
     this.#tools = new Map()
     this.#serverVersion = undefined
     this.#catalogBytes = 0
     this.#contractAcquiredAt = undefined
     this.#lastResponseAt = undefined
     this.#contractDigest = undefined
+    let cleanupError
     try {
       if (client !== undefined) await client.close()
       else if (transport !== undefined) await transport.close()
     } catch (error) {
-      throw new HostError('HOST_CLEANUP_FAILED', 'MCP provider session did not close cleanly', { cause: error })
+      cleanupError = new HostError('HOST_CLEANUP_FAILED', 'MCP provider session did not close cleanly', { cause: error })
+    }
+    try {
+      await awaitCancelledStartup(starting)
+    } catch (error) {
+      cleanupError ??= error instanceof HostError && error.code === 'HOST_CLEANUP_FAILED'
+        ? error
+        : new HostError('HOST_CLEANUP_FAILED', 'MCP session startup cleanup did not finish', { cause: error })
     }
     if (pid !== null && !(await waitForPidExit(pid))) {
-      throw new HostError('HOST_CLEANUP_FAILED', 'MCP provider process remained after session close')
+      cleanupError ??= new HostError('HOST_CLEANUP_FAILED', 'MCP provider process remained after session close')
     }
+    try {
+      await this.#releaseLaunchSnapshot(launchSnapshot)
+    } catch (error) {
+      cleanupError ??= new HostError('HOST_CLEANUP_FAILED', 'MCP provider launch snapshot was not removed', { cause: error })
+    }
+    if (cleanupError !== undefined) throw cleanupError
   }
 }

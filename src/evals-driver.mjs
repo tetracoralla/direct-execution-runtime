@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { boundedMessage, HostError } from './errors.mjs'
 import { EVALS_DRIVER_ID, EVALS_DRIVER_VERSION } from './evals-driver-identity.mjs'
 import { requestDirectHost } from './host-client.mjs'
-import { parseStrictJson } from './json.mjs'
+import { decodeUtf8Strict, parseStrictJson } from './json.mjs'
 import { assertSchema, createValidator, loadBundledSchema } from './schema.mjs'
 
 const MAX_REQUEST_BYTES = 1024 * 1024
@@ -67,7 +67,7 @@ async function readRequest() {
     if (bytes > MAX_REQUEST_BYTES) throw new HostError('HOST_INPUT_TOO_LARGE', 'Evaluator request exceeds one MiB')
     chunks.push(chunk)
   }
-  const request = parseStrictJson(Buffer.concat(chunks).toString('utf8'), 'evaluator request')
+  const request = parseStrictJson(decodeUtf8Strict(Buffer.concat(chunks), 'evaluator request'), 'evaluator request')
   const validate = createValidator().compile(await loadBundledSchema('evals-direct-driver-request.schema.json'))
   assertSchema(validate, request, 'HOST_EVAL_REQUEST_INVALID', 'evaluator request')
   return request

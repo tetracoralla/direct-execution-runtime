@@ -96,6 +96,22 @@ function packagedWorkOrder(id) {
   }
 }
 
+function packagedResolutionRequest() {
+  return {
+    schemaVersion: 'openadam.direct-resolution-request.v0.1',
+    target: {
+      kind: 'capability',
+      capabilityId: 'org.openadam.test.echo',
+      capabilityVersion: '0.1.0',
+      operationId: 'echo',
+    },
+    constraints: {
+      effectAllowance: 'read-only',
+      dataLocality: 'local-process',
+    },
+  }
+}
+
 try {
   const packed = await execFileAsync('npm', ['pack', '--json', '--pack-destination', directory], {
     cwd: root,
@@ -127,6 +143,8 @@ try {
     'schemas/host-response.schema.json',
     'schemas/host-service-observation.schema.json',
     'schemas/contract-selection.schema.json',
+    'schemas/resolution-request.schema.json',
+    'schemas/resolution-result.schema.json',
     'schemas/execution-observation.schema.json',
     'schemas/evals-direct-driver-request.schema.json',
     'schemas/evals-direct-driver-result.schema.json',
@@ -149,20 +167,32 @@ try {
   await execFileAsync(process.execPath, [
     '--input-type=module',
     '--eval',
-    "import('@openadam/direct-execution-runtime').then((module) => { if (typeof module.DirectExecutionRuntime !== 'function' || typeof module.DirectHostService !== 'function' || typeof module.requestDirectHost !== 'function' || typeof module.JsonlObservationSink !== 'function' || module.EVALS_DRIVER_VERSION !== '0.1.0') process.exit(2) })",
+    "import('@openadam/direct-execution-runtime').then((module) => { if (typeof module.DirectExecutionRuntime !== 'function' || typeof module.DirectHostService !== 'function' || typeof module.requestDirectHost !== 'function' || typeof module.JsonlObservationSink !== 'function' || typeof module.validateResolutionResult !== 'function' || module.EVALS_DRIVER_VERSION !== '0.1.0') process.exit(2) })",
   ], { cwd: consumer, maxBuffer: 1024 * 1024 })
 
   const fakeRoot = resolve(root, 'test/fixtures/fake-capability')
   const configPath = resolve(directory, 'provider-config.json')
   const firstOrderPath = resolve(directory, 'work-order-first.json')
   const secondOrderPath = resolve(directory, 'work-order-second.json')
+  const resolutionPath = resolve(directory, 'resolution-request.json')
   const socketPath = resolve(directory, 'runtime.sock')
   await Promise.all([
     writeFile(configPath, `${JSON.stringify(packagedProviderConfig(fakeRoot))}\n`),
     writeFile(firstOrderPath, `${JSON.stringify(packagedWorkOrder('packaged-first'))}\n`),
     writeFile(secondOrderPath, `${JSON.stringify(packagedWorkOrder('packaged-second'))}\n`),
+    writeFile(resolutionPath, `${JSON.stringify(packagedResolutionRequest())}\n`),
   ])
   const installedCli = resolve(consumer, 'node_modules/@openadam/direct-execution-runtime/src/cli.mjs')
+  const resolved = JSON.parse((await execFileAsync(process.execPath, [
+    installedCli, 'resolve', '--config', configPath, '--requirement', resolutionPath,
+  ])).stdout)
+  if (
+    resolved.status !== 'eligible_for_this_request' ||
+    resolved.candidates?.[0]?.observation?.executionAvailability !== 'not_observed' ||
+    resolved.candidates?.[0]?.observation?.targetOperationInvoked !== false
+  ) {
+    throw new Error('installed config-backed resolver did not return the bounded exact candidate')
+  }
   const service = spawn(process.execPath, [installedCli, 'serve', '--config', configPath, '--socket', socketPath], {
     cwd: consumer,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -209,6 +239,11 @@ try {
       firstSession: first.calls[0].session,
       secondSession: second.calls[0].session,
       cleanShutdown: true,
+    },
+    installedResolver: {
+      status: resolved.status,
+      candidates: resolved.summary.exactCandidates,
+      targetOperationInvoked: resolved.candidates[0].observation.targetOperationInvoked,
     },
   }) + '\n')
 } finally {

@@ -157,7 +157,7 @@ test('a structured Procedure call runs directly and preserves provider-owned err
 })
 
 test('selected MCP operations project and compile only their own live contract', async () => {
-  await withRuntime(fakeProjectedMcpConfig({ limits: { defaultTimeoutMs: 3000 } }), async (runtime) => {
+  await withRuntime(fakeProjectedMcpConfig({ limits: { defaultTimeoutMs: 10000 } }), async (runtime) => {
     const target = { kind: 'mcp-operation', toolName: 'dispatch', operationId: 'text.upper' }
     const projected = await runtime.projectContract({
       schemaVersion: 'openadam.direct-contract-selection.v0.1',
@@ -196,8 +196,49 @@ test('selected MCP operations project and compile only their own live contract',
   })
 })
 
+test('MCP live catalog acquisition follows pagination before binding allowed tools', async () => {
+  const config = fakeMcpConfig({ args: ['--paginate-tools'] })
+  config.providers[0].allowedTools = ['dispatch.compact']
+  await withRuntime(config, async (runtime) => {
+    const call = {
+      id: 'page-two-tool',
+      providerId: 'test.fake-mcp',
+      target: { kind: 'mcp-tool', toolName: 'dispatch.compact' },
+      input: { operation: 'text.echo', arguments: { value: 'page-two' } },
+    }
+    const result = await runtime.runWorkOrder(workOrder('paginated-catalog', [call]))
+    assert.equal(result.calls[0].status, 'ok')
+    assert.equal(result.calls[0].result.value, 'page-two')
+    assert.equal(result.calls[0].session, 'cold')
+    const observation = runtime.sessionSnapshot()[0]
+    assert.equal(observation.generation, 1)
+    assert.equal(observation.live.catalogBytes > 0, true)
+    assert.deepEqual(observation.live.tools, ['dispatch.compact'])
+  })
+})
+
+test('MCP catalog pagination that never advances fails closed without a binding', async () => {
+  const config = fakeMcpConfig({ args: ['--paginate-forever'] })
+  config.providers[0].allowedTools = ['dispatch.batch']
+  await withRuntime(config, async (runtime) => {
+    const call = {
+      id: 'spinning-catalog',
+      providerId: 'test.fake-mcp',
+      target: { kind: 'mcp-tool', toolName: 'dispatch.batch' },
+      input: { items: [{ operation: 'text.echo', arguments: { value: 'x' } }] },
+    }
+    const result = await runtime.runWorkOrder(workOrder('spinning-catalog', [call]))
+    assert.equal(result.calls[0].status, 'host_error')
+    assert.equal(result.calls[0].error.code, 'HOST_BINDING_INVALID')
+    assert.match(result.calls[0].error.message, /pagination did not advance/u)
+    const observation = runtime.sessionSnapshot()[0]
+    assert.equal(observation.pid, null)
+    assert.deepEqual(observation.live.tools, [])
+  })
+})
+
 test('compact MCP operations acquire one selected schema through a declared live lookup tool', async () => {
-  await withRuntime(fakeLookupProjectedMcpConfig({ limits: { defaultTimeoutMs: 3000 } }), async (runtime) => {
+  await withRuntime(fakeLookupProjectedMcpConfig({ limits: { defaultTimeoutMs: 10000 } }), async (runtime) => {
     const target = { kind: 'mcp-operation', toolName: 'dispatch.compact', operationId: 'text.upper' }
     const projected = await runtime.projectContract({
       schemaVersion: 'openadam.direct-contract-selection.v0.1',
@@ -391,6 +432,10 @@ test('running cancellation replaces the JSONL session and releases admission', a
 
 test('one JSONL timeout reports collateral calls as session replacement, not false cancellation', async () => {
   await withRuntime(fakeConfig({ limits: { maxConcurrentCalls: 2 } }), async (runtime) => {
+    const warmed = await runtime.runWorkOrder(workOrder('collateral-warmup', [
+      fakeCall('warmup', { value: 'ready' }),
+    ]))
+    assert.equal(warmed.calls[0].status, 'ok')
     const result = await runtime.runWorkOrder(workOrder('collateral-replacement', [
       fakeCall('timed-out', { value: 'late', delayMs: 100 }, 10),
       fakeCall('collateral', { value: 'also-late', delayMs: 100 }, 1000),
@@ -465,6 +510,69 @@ test('cold MCP startup deadline terminates the child before a later cold recover
     assert.equal(recovered.calls[0].result.value, 'ready')
     assert.match(recovered.calls[0].binding.contractDigest, /^sha256:[a-f0-9]{64}$/)
     assert.equal(recovered.calls[0].binding.contractSource, 'live-session')
+  })
+})
+
+test('one cancelled waiter does not poison a shared persistent MCP startup', async () => {
+  const config = fakeMcpConfig({
+    args: ['--startup-delay=250'],
+    limits: { defaultTimeoutMs: 10000, maxConcurrentCalls: 2 },
+  })
+  await withRuntime(config, async (runtime) => {
+    const controller = new AbortController()
+    const survivor = runtime.runWorkOrder(workOrder('mcp-shared-startup-survivor', [
+      fakeMcpCall('survivor', { value: 'ready' }),
+    ]))
+    const cancelled = runtime.runWorkOrder(workOrder('mcp-shared-startup-cancelled', [
+      fakeMcpCall('cancelled', { value: 'must-not-run' }),
+    ]), { signal: controller.signal })
+
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (runtime.admissionSnapshot().active === 2 && Number.isInteger(runtime.sessionSnapshot()[0].pid)) break
+      await delay(2)
+    }
+    assert.equal(runtime.admissionSnapshot().active, 2)
+    assert.ok(Number.isInteger(runtime.sessionSnapshot()[0].pid))
+    controller.abort()
+
+    const [survived, stopped] = await Promise.all([survivor, cancelled])
+    assert.equal(stopped.calls[0].error.code, 'HOST_CANCELLED')
+    assert.equal(survived.calls[0].status, 'ok')
+    assert.equal(survived.calls[0].result.value, 'ready')
+    assert.notEqual(survived.calls[0].error?.code, 'HOST_PROVIDER_UNAVAILABLE')
+    assert.equal(runtime.sessionSnapshot()[0].generation, 1)
+  })
+})
+
+test('explicit replacement during shared MCP startup is stable, retryable, and recoverable', async () => {
+  const config = fakeMcpConfig({
+    args: ['--startup-delay=250'],
+    limits: { defaultTimeoutMs: 10000, maxConcurrentCalls: 2 },
+  })
+  await withRuntime(config, async (runtime) => {
+    const interrupted = runtime.runWorkOrder(workOrder('mcp-shared-startup-replaced', [
+      fakeMcpCall('first', { value: 'first' }),
+      fakeMcpCall('second', { value: 'second' }),
+    ]))
+
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (runtime.admissionSnapshot().active === 2 && Number.isInteger(runtime.sessionSnapshot()[0].pid)) break
+      await delay(2)
+    }
+    assert.equal(runtime.admissionSnapshot().active, 2)
+    assert.ok(Number.isInteger(runtime.sessionSnapshot()[0].pid))
+    await runtime.replaceProvider('test.fake-mcp')
+
+    const replaced = await interrupted
+    assert.equal(replaced.calls.every((call) => call.error.code === 'HOST_PROVIDER_REPLACED'), true)
+    assert.equal(replaced.calls.every((call) => call.error.retryable === true), true)
+    assert.equal(runtime.sessionSnapshot()[0].pid, null)
+
+    const recovered = await runtime.runWorkOrder(workOrder('mcp-shared-startup-replacement-recovery', [
+      fakeMcpCall('recovered', { value: 'ready' }),
+    ]))
+    assert.equal(recovered.calls[0].status, 'ok')
+    assert.equal(recovered.calls[0].session, 'cold')
   })
 })
 

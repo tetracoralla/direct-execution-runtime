@@ -5,6 +5,14 @@ outside source control.
 
 Provider configuration uses `openadam.direct-provider-config.v0.2`.
 
+The JavaScript entry first copies the complete configuration through a
+descriptor-only ordinary-data boundary. Proxy values, accessors, hidden or
+symbol properties, exotic prototypes, sparse arrays, custom `toJSON`, cycles,
+and lone Unicode surrogates are rejected without invoking user code. The
+prepared provider registry, limits, arguments, and binding records are owned
+and frozen by the runtime; later mutation of the caller's source object cannot
+change them.
+
 For a Capability JSONL provider, configure its root, external current
 Capability Profile v0.3, Provider Manifest v0.3, provider-owned execution
 identity files, and input/output schema files for each admitted operation. The
@@ -60,11 +68,66 @@ entry files and any other files needed to distinguish the runnable build must
 be listed explicitly in `identityFiles`; the runtime does not infer them from
 command arguments.
 
+Before any new JSONL or MCP session starts, the runtime reacquires the current
+executable path and bytes plus the configured arguments, contract/Profile or
+manifest material, and declared identity-file digests. A mismatch with the
+prepared binding fails closed as `HOST_PROVIDER_REPLACED`; the runtime does not
+run changed provider code while reporting an older binding digest. It then
+copies the resolved command and every declared identity file into a private
+mode-`0700` per-session execution view, verifies each copied byte stream against
+the prepared digest, and launches the single-link read-only copies. Only the
+command, arguments that resolve exactly to declared identity files, and PATH
+directories containing declared executables are redirected into that view.
+The configured canonical working directory and `PWD` remain the original
+provider root, and work-order input paths are never rewritten, so an authorized
+business workspace does not become a sparse staging tree.
+
+An already running warm process therefore keeps using its frozen declared
+execution bytes even if a source file is replaced. A new session must pass
+current-source revalidation and create a new verified execution view. Sparse
+links adjacent to the copied identities may expose undeclared runtime
+dependencies needed by an interpreter or package loader; those dependencies,
+the interpreter chain, dynamic libraries, the operating system, and business
+workspace contents are trusted external inputs and are not covered by the
+binding digest or fixed-byte claim.
+
 Configured provider executables are trusted local code and run with the host
 user's ordinary filesystem and process permissions. These binding checks do
 not create an operating-system sandbox or credential boundary. Deployments
 that require isolation must supply it outside this runtime and must not place
 secrets in provider configuration or work orders.
+
+## Closed requirement resolution
+
+`resolve --config ... --requirement ...` accepts
+`openadam.direct-resolution-request.v0.1`. The caller must supply an exact
+Capability operation, Procedure, MCP tool, or MCP operation and the fixed
+`read-only` plus `local-process` boundary. It may also require a contract
+digest, cap selected contract schema bytes, and shorten the Host's configured
+projection deadline. A request cannot lengthen the configured default timeout.
+
+Matching uses only configured providers and never widens the requested target.
+For a projected MCP operation, `configuredMatches` counts the explicit closed
+projection envelope while `exactCandidates` counts only operation identities
+observed from the current live contract. If that contract is unavailable, the
+candidate remains `unknown`, its `projectionEnvelopeMatch` is `satisfied`, and
+its `semanticIdentity` is `not_observed`. A healthy contract that definitively
+omits the requested operation produces no candidate. MCP startup connection
+loss is a retryable Host unavailable observation rather than an internal error;
+connection loss after initialization is a retryable Host transport observation.
+
+The result omits full schemas, unrelated provider identities, fuzzy
+alternatives, scores, and free-text selection advice. Contract and byte checks
+are mechanical. JSONL contract projection does not start the provider process;
+live MCP contract projection does. Neither route invokes the target operation,
+and neither is a credential, permission, future-health, or business-correctness
+check. Each result is a point-in-time observation that must be reacquired before
+reuse.
+
+Resolution is intentionally absent from the v0.1 Unix Socket request schema.
+A future long-lived-service form requires an explicit protocol revision and
+compatibility path; configuration-backed CLI/library use avoids pretending the
+existing protocol already supports it.
 
 `examples/provider-config.example.json` is intentionally non-runnable. Copy it
 to a local ignored location and replace every `/opt/provider/...` value with an
