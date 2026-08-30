@@ -176,6 +176,7 @@ export class DirectHostService {
     let responded = false
     let requestId = 'invalid-request'
     let controller
+    let framingError
 
     const respond = (response) => {
       if (responded || socket.destroyed) return
@@ -198,16 +199,14 @@ export class DirectHostService {
     // while waiting for the response (installed 0.1.x clients).
     socket.on('data', (chunk) => {
       if (responded) return
+      if (processing) {
+        framingError ??= new HostError('HOST_PROTOCOL_ERROR', 'Host service accepts exactly one request per connection')
+        controller?.abort()
+        return
+      }
       buffer = Buffer.concat([buffer, chunk])
       if (buffer.length > this.requestLimit) {
         fail(new HostError('HOST_INPUT_TOO_LARGE', 'Host service request exceeds its complete envelope limit'))
-        return
-      }
-      if (processing) {
-        if (chunk.toString('utf8').trim().length !== 0) {
-          controller?.abort()
-          fail(new HostError('HOST_PROTOCOL_ERROR', 'Host service accepts exactly one request per connection'))
-        }
         return
       }
       const newline = buffer.indexOf(0x0a)
@@ -241,9 +240,10 @@ export class DirectHostService {
             : request.action === 'validate'
               ? await this.runtime.validateWorkOrder(request.workOrder, { signal: controller.signal })
               : await this.runtime.runWorkOrder(request.workOrder, { signal: controller.signal })
-          respond(hostSuccess(request.id, result))
+          if (framingError !== undefined) fail(framingError)
+          else respond(hostSuccess(request.id, result))
         } catch (error) {
-          fail(error)
+          fail(framingError ?? error)
         } finally {
           if (controller !== undefined) this.#controllers.delete(controller)
         }

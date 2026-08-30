@@ -96,12 +96,18 @@ Unix Socket service. The service exists so separate host clients can reuse one
 bounded runtime and its provider sessions. It is an operator-managed current
 host process, not an Agent shell modification and not an MCP server.
 
-The Socket protocol accepts exactly one strict JSON request and returns exactly
-one strict JSON response per connection. Each peer validates its one complete
-line only after EOF, so a second delayed line cannot be hidden behind an early
-dispatch or response. Only `inspect`, `project`, `validate`, and `run` are
-admitted. `project` returns one already-selected typed contract; it never
-invokes the selected target operation and is not exposed as an Agent tool.
+The Socket protocol accepts exactly one strict newline-terminated JSON request
+and returns exactly one strict newline-terminated JSON response per connection.
+A complete request line starts processing without waiting for client EOF so
+installed clients may keep their write side open while awaiting the response.
+Trailing bytes already buffered after that line are rejected before dispatch.
+If additional bytes arrive after a read-only operation has started, the service
+cancels that operation and waits for its runtime admission and provider cleanup
+to settle before returning `HOST_PROTOCOL_ERROR`; this prevents the rejected
+connection from racing the next ordinary client, but does not claim the first
+read-only operation never began. Only `inspect`, `project`, `validate`, and
+`run` are admitted. `project` returns one already-selected typed contract; it
+never invokes the selected target operation and is not exposed as an Agent tool.
 Live contract projection (`project`, `validate`, and closed resolution over
 projected operations) may start a bounded contract session and, for a compact
 projected envelope, may call only the explicitly bound read-only schema-lookup
@@ -113,9 +119,10 @@ must be owned by and accessible only to the current user; the created Socket is
 mode `0600`. Both the requested path and the path reconstructed from the
 canonical parent are checked against the platform's UTF-8 byte limit before
 listening. An incomplete request has a bounded receive deadline and cannot start
-work. Once request EOF transfers a complete request, later abandonment of the
-response-reading side is not a reliable Unix Socket cancellation signal; that
-transferred run may finish and its eligible warm provider session may be reused.
+work. Once a complete newline-terminated request line has been accepted, later
+abandonment of the response-reading side is not a reliable Unix Socket
+cancellation signal; that transferred run may finish and its eligible warm
+provider session may be reused.
 Graceful service shutdown still cancels all owned work, closes provider sessions,
 and removes only the Socket inode created by the service. Host error-message
 length follows JSON Schema Unicode code-point semantics; the complete response

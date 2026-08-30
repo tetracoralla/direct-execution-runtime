@@ -242,10 +242,11 @@ maintainer-only integration check: it uses the current sibling development
 checkouts without modifying them and writes a current-run observation to
 ignored `.verify/`. It is not required to build or use the public repository,
 and its observation is not an SLA or a universal cost-savings claim.
-If a required sibling provider checkout such as Calculator/Math Anchor is
-absent, the command reports the schema comparison separately and exits with
-the provider pilot explicitly `not_run`; it never aggregates that state into a
-PASS.
+If Math Anchor is not in the sibling `calculator` checkout, set
+`OPENADAM_MATH_ANCHOR_ROOT` to its absolute checkout path. If the selected
+checkout is absent, the command reports the schema comparison separately and
+exits with the provider pilot explicitly `not_run`; it never aggregates that
+state into a PASS.
 Maintainers may explicitly set `OPENADAM_DIRECT_OBSERVATION_LOG` while running
 the local pilot to emit the same privacy-bounded execution events for local
 Agent Tool Observer ingestion; the variable is otherwise inactive.

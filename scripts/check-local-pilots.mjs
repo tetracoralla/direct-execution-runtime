@@ -13,11 +13,12 @@ import { jsonBytes } from '../src/json.mjs'
 import { DirectExecutionRuntime } from '../src/runtime.mjs'
 import { JsonlObservationSink } from '../src/observations.mjs'
 import { checkSchemaParity } from './check-schema-parity.mjs'
+import { resolveMathAnchorRoot } from './local-pilot-paths.mjs'
 
 const execFileAsync = promisify(execFile)
 const root = fileURLToPath(new URL('../', import.meta.url))
 const workspace = resolve(root, '..')
-const calculatorRoot = resolve(workspace, 'calculator')
+const mathAnchorRoot = resolveMathAnchorRoot(workspace)
 const timeRoot = resolve(workspace, 'migratory-time')
 const dependencyRoot = resolve(workspace, 'dependency-preflight')
 const structuredRoot = resolve(workspace, 'structured-data-preflight')
@@ -92,7 +93,7 @@ function waitForJsonLine(child, timeoutMs = 15_000) {
 const schemaParity = await checkSchemaParity()
 let mathAnchorVersion
 try {
-  mathAnchorVersion = projectVersion(await readFile(resolve(calculatorRoot, 'pyproject.toml'), 'utf8'))
+  mathAnchorVersion = projectVersion(await readFile(resolve(mathAnchorRoot, 'pyproject.toml'), 'utf8'))
 } catch (error) {
   if (error?.code !== 'ENOENT') throw error
   process.stdout.write(`${JSON.stringify({
@@ -100,7 +101,7 @@ try {
     schemaParity,
     providerPilot: {
       status: 'not_run',
-      reason: 'calculator checkout is unavailable',
+      reason: 'Math Anchor checkout is unavailable; set OPENADAM_MATH_ANCHOR_ROOT',
     },
   })}\n`)
   process.exit(2)
@@ -126,14 +127,14 @@ function providers(dependencyLifecycle = 'persistent') {
       providerId: 'io.github.tetracoralla.math-anchor',
       transport: 'mcp-stdio',
       lifecycle: 'persistent',
-      rootPath: calculatorRoot,
-      command: resolve(calculatorRoot, '.venv/bin/math-anchor-mcp'),
+      rootPath: mathAnchorRoot,
+      command: resolve(mathAnchorRoot, '.venv/bin/math-anchor-mcp'),
       args: [],
-      cwd: calculatorRoot,
+      cwd: mathAnchorRoot,
       identityFiles: [
-        resolve(calculatorRoot, '.venv/bin/math-anchor-mcp'),
-        resolve(calculatorRoot, 'src/math_anchor/mcp_server.py'),
-        resolve(calculatorRoot, 'pyproject.toml'),
+        resolve(mathAnchorRoot, '.venv/bin/math-anchor-mcp'),
+        resolve(mathAnchorRoot, 'src/math_anchor/mcp_server.py'),
+        resolve(mathAnchorRoot, 'pyproject.toml'),
       ],
       expectedServer: { name: 'Math Anchor', version: mathAnchorVersion },
       allowedTools: ['math.run', 'math.batch', 'math.describe'],

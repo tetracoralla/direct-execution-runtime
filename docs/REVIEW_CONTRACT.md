@@ -71,10 +71,15 @@ current verdict.
     again after canonicalizing its parent; canonicalization cannot expand it
     past the platform UTF-8 byte limit and defer failure to `listen`.
 15. Separate client processes reuse eligible provider sessions. The service
-    dispatches only after request EOF; pre-EOF disconnect cannot start work.
-    After complete-request transfer, abandonment of the response-reading side
-    is not claimed as cancellation. Shutdown closes owned providers, and
-    cleanup removes only the Socket inode created by this service.
+    dispatches after one complete newline-terminated request line, without
+    waiting for client EOF. A disconnect before that complete line cannot start
+    work. Bytes already buffered after the first line are rejected before
+    dispatch; delayed extra bytes abort an active read-only operation and the
+    service waits for runtime/provider cleanup before returning the protocol
+    error, but does not claim that the first operation never began. After a
+    complete request-line transfer, abandonment of the response-reading side is
+    not claimed as cancellation. Shutdown closes owned providers, and cleanup
+    removes only the Socket inode created by this service.
 16. Optional observation writes only the closed v0.1 metadata event to an
     absolute owner-only regular file. It contains no raw IDs, work order, input,
     result, or error message; it preserves zero model calls and null external
@@ -148,9 +153,11 @@ current verdict.
 - a 600-emoji Host error message is accepted by both schema and runtime, a
   1004-code-point message is rejected by both, and either remains subject to the
   complete serialized UTF-8 response budget;
-- incomplete request disconnect without hidden work; response-reader
-  abandonment after complete-request EOF followed by an ordinary successful
-  call from a new client, with bounded admission and reusable provider state;
+- incomplete request-line disconnect without hidden work; a delayed second line
+  aborts and settles the active read-only operation before the protocol error is
+  returned and an ordinary call from a new client recovers; response-reader
+  abandonment after complete request-line transfer leaves bounded admission and
+  reusable eligible provider state;
 - service shutdown followed by zero owned provider processes and no owned
   Socket path.
 - observation success, privacy projection, sink failure, insecure/symlink log,
@@ -210,7 +217,9 @@ current verdict.
   Math Anchor MCP, Migratory Time Capability JSONL, and Dependency Preflight
   Procedure JSONL, plus a short-lived Dependency Preflight Capability check and
   both branches of Structured Data Preflight's conditional Procedure; the
-  targeted Structured Data Preflight check additionally rebuilds temporary
+  Math Anchor checkout may be selected explicitly with
+  `OPENADAM_MATH_ANCHOR_ROOT` when it is not the sibling `calculator` checkout;
+  the targeted Structured Data Preflight check additionally rebuilds temporary
   packaged adapters and covers stable provider/host failures, mixed partial
   results, cancellation and timeout recovery, and provider-response budget
   recovery;
