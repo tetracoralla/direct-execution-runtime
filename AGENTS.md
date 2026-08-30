@@ -44,5 +44,6 @@ generic invocation tool.
   install globally, or deploy without explicit owner authorization.
 
 Run `npm run check` for development regression and `npm run check:local-pilots`
-for the current three-provider maintainer pilot. Report installed-host,
-performance/load, and owner business acceptance separately.
+for the maintainer pilots currently registered by source. Derive provider count
+and identity from the current runner rather than this prose. Report installed-
+host, performance/load, and owner business acceptance separately.
