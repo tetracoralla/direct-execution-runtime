@@ -151,7 +151,10 @@ export class McpSession {
       // abandoned cold start cannot leave an unowned warm provider behind.
       if (
         abandoned && this.#startupWaiters === 0 &&
-        (this.#starting === starting || (this.#starting === undefined && this.#client !== undefined))
+        (
+          this.#starting === starting ||
+          (this.#starting === undefined && (this.#client !== undefined || this.#transport !== undefined))
+        )
       ) {
         await this.close()
       }
