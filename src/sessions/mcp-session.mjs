@@ -173,6 +173,14 @@ export class McpSession {
     }
     this.#launchSnapshot = launchSnapshot
     const environment = await launchSnapshot.prepareEnvironment(getDefaultEnvironment())
+    // close() can clear the startup owner while the private launch
+    // environment is being prepared. Re-check before publishing a transport;
+    // otherwise the abandoned startup can attach a child after close() has
+    // already captured an empty session and leave that process unowned.
+    if (this.#starting !== starting) {
+      await this.#releaseLaunchSnapshot(launchSnapshot)
+      throw new HostError('HOST_PROVIDER_REPLACED', 'MCP session startup was replaced', { retryable: true })
+    }
     const transport = new StrictMcpStdioTransport({
       command: launchSnapshot.command,
       args: launchSnapshot.args,
