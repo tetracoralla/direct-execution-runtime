@@ -209,9 +209,13 @@ test('reader abandonment after request-line transfer cannot corrupt work or admi
       socket.once('error', reject)
     })
     socket.end(`${JSON.stringify(request)}\n`)
-    await waitFor(() => runtime.admissionSnapshot().active === 1)
+    // A full parallel test run can delay the adapter's cold start well beyond
+    // the 500 ms provider delay. This assertion is about lifecycle cleanup,
+    // not a two-second performance contract, so retain a bounded but realistic
+    // allowance for the admitted call to start and settle.
+    await waitFor(() => runtime.admissionSnapshot().active === 1, 5000)
     socket.destroy()
-    await waitFor(() => runtime.admissionSnapshot().active === 0)
+    await waitFor(() => runtime.admissionSnapshot().active === 0, 5000)
     assert.equal(responseBytes, 0)
     const recovered = await requestDirectHost({
       socketPath,
