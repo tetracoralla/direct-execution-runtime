@@ -73,6 +73,14 @@ function pidExists(pid) {
 
 const MAX_TOOL_CATALOG_PAGES = 1024
 
+async function observeConcurrentStderr() {
+  // stdout and stderr are separate pipes. A provider can write stderr before
+  // its response while the parent observes the stdout response first. Yield
+  // through the I/O phase before accepting the response so a stderr overflow
+  // from the same provider turn deterministically poisons that turn.
+  await new Promise((resolve) => setImmediate(resolve))
+}
+
 async function waitForPidExit(pid, timeoutMs = 1000) {
   const deadline = Date.now() + timeoutMs
   while (pidExists(pid) && Date.now() < deadline) {
@@ -434,6 +442,7 @@ export class McpSession {
         ),
         { code: 'HOST_PROVIDER_PROTOCOL_ERROR', label: 'MCP schema lookup response' },
       )
+      await observeConcurrentStderr()
     } catch (error) {
       const cancelled = options.signal?.aborted === true
       const timeout = !cancelled && Date.now() >= deadlineAt
@@ -450,6 +459,11 @@ export class McpSession {
         cause: error,
         retryable: true,
       })
+    }
+    if (this.#fatalError !== undefined) {
+      const fatal = this.#fatalError
+      await this.close()
+      throw fatal
     }
     if (jsonBytes(response) > this.binding.limits.maxProviderResponseBytes) {
       await this.close()
@@ -531,6 +545,7 @@ export class McpSession {
         ),
         { code: 'HOST_PROVIDER_PROTOCOL_ERROR', label: 'MCP tool response' },
       )
+      await observeConcurrentStderr()
     } catch (error) {
       const cancelled = signal?.aborted === true
       const timeout = !cancelled && Date.now() >= deadlineAt
