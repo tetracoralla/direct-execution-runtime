@@ -127,8 +127,8 @@ test('invalid host protocol input is bounded and does not poison the next reques
   })
 })
 
-test('incomplete and pipelined requests cannot retain a connection slot or start hidden work', async () => {
-  await withService(async ({ socketPath }) => {
+test('incomplete and delayed extra requests cannot retain admission or race the next client', async () => {
+  await withService(async ({ runtime, socketPath }) => {
     const incomplete = await new Promise((resolvePromise, reject) => {
       const chunks = []
       const socket = connect({ path: socketPath })
@@ -158,17 +158,19 @@ test('incomplete and pipelined requests cannot retain a connection slot or start
       socket.once('end', () => resolvePromise(JSON.parse(Buffer.concat(chunks).toString('utf8'))))
     })
     assert.equal(pipelined.error.code, 'HOST_PROTOCOL_ERROR')
+    assert.equal(runtime.admissionSnapshot().active, 0)
+    assert.equal(runtime.admissionSnapshot().queued, 0)
 
     const recovered = await requestDirectHost({
       socketPath,
       action: 'run',
       workOrder: workOrder('request-framing-recovery', [fakeCall('ready', { value: 'ready' })]),
     })
-    assert.equal(recovered.calls[0].status, 'ok')
+    assert.equal(recovered.calls[0].status, 'ok', JSON.stringify(recovered.calls[0]))
   }, fakeConfig(), { requestReceiveTimeoutMs: 25 })
 })
 
-test('disconnect before a complete request EOF starts no work and preserves a cold recovery', async () => {
+test('disconnect before a complete request line starts no work and preserves a cold recovery', async () => {
   await withService(async ({ runtime, socketPath }) => {
     const socket = connect({ path: socketPath })
     await new Promise((resolvePromise, reject) => {
@@ -191,7 +193,7 @@ test('disconnect before a complete request EOF starts no work and preserves a co
   })
 })
 
-test('reader abandonment after request EOF cannot corrupt transferred work or admission', async () => {
+test('reader abandonment after request-line transfer cannot corrupt work or admission', async () => {
   await withService(async ({ runtime, socketPath }) => {
     const request = {
       schemaVersion: HOST_REQUEST_VERSION,
