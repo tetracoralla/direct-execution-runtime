@@ -1,10 +1,8 @@
 # Direct Execution Runtime repository contract
 
-This checkout is a temporary legacy migration source. New source ownership is
-`../agent-host-suite/packages/direct-execution-runtime`; preserve this checkout
-and its current uncommitted documentation until the Agent Host package passes
-the original Runtime checks and the Host package/build/runtime sequence. Do not
-start a second feature line or publish from this checkout during migration.
+Current source ownership is [direct-execution-runtime in Agent Host](https://github.com/tetracoralla/agent-host-suite/tree/main/packages/direct-execution-runtime).
+This repository retains historical source. Apply new implementation and release
+work in Agent Host; the contract below describes this retained implementation.
 
 Read `docs/PRODUCT_MODEL.md` and `docs/REVIEW_CONTRACT.md` before changing or
 reviewing this runtime.

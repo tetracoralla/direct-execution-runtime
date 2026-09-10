@@ -1,10 +1,9 @@
 # Direct Execution Runtime
 
-> **Migration status:** active source ownership is being consolidated into
-> `agent-host-suite/packages/direct-execution-runtime`. This checkout is retained
-> as a recoverable compatibility source while the Agent Host build and runtime
-> routes are revalidated. Do not begin an independent feature or release line
-> here.
+> **Current source:** [direct-execution-runtime in Agent Host](https://github.com/tetracoralla/agent-host-suite/tree/main/packages/direct-execution-runtime).
+> Development, installation, and current integration documentation now belong to
+> Agent Host. This repository retains the earlier standalone source; the
+> instructions below describe that historical version.
 
 Direct Execution Runtime is a local, host-owned execution layer for work that
 an Agent or automation has already reduced to closed structured provider calls.
