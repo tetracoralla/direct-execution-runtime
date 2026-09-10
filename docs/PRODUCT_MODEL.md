@@ -63,6 +63,12 @@ read-only, local-process boundary. Optional constraints pin one contract digest,
 cap contract schema bytes, or shorten the configured projection deadline. It
 contains no prose query, tags, preferences, score weights, or open-ended policy.
 
+`local-process` describes the carrier this runtime directly starts and
+observes. It does not inspect or constrain what an admitted Provider does after
+startup. In particular, a local adapter may bridge to a remote API; a satisfied
+local-process check is therefore not proof of local-only data handling, no
+network egress, endpoint authorization, or credential readiness.
+
 The runtime checks only configured bindings that can carry the requested exact
 semantic identity. For Capability, Procedure, and raw MCP tools, configuration
 names that identity directly. For a projected MCP operation, configuration
@@ -199,6 +205,11 @@ Undeclared imports, interpreter binaries and libraries, adjacent package-loader
 content, operating-system state, and provider workspace data remain trusted
 dependencies outside the binding digest. They must not be described as frozen,
 isolated, or proven merely because declared identities were staged.
+
+The same boundary applies to network behavior. Provider-internal remote calls
+are outside the execution-view digest and are not observed by resolution. Any
+remote endpoint, credential, privacy, or egress policy remains an explicit
+Provider Instance and Host authorization concern.
 
 At the Capability JSONL v0.1 boundary, provider errors have exact fields
 `{code,message}` or `{code,message,retryable}`. Retryability belongs to the

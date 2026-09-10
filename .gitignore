@@ -6,3 +6,5 @@ coverage/
 *.sock
 *.log
 .DS_Store
+.v2c/
+.video_agent/

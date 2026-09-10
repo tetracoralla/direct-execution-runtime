@@ -34,6 +34,13 @@ Procedure over the current File Vitals and BatchTicket Capability adapters.
 Neither Procedure implementation is advertised as an installed or public
 integration of this runtime.
 
+Capability HTTP Bridge is a separate development-only Provider product. Its
+maintainer pilot demonstrates that a local Capability JSONL adapter can carry a
+typed call across a bounded loopback HTTP endpoint and return through this
+runtime. It is not a current public integration, production remote endpoint,
+credential-readiness check, or proof that a `local-process` resolution result
+means no network egress.
+
 `npm run check:schema-parity` compares bundled compatibility schemas with their
 current sibling source without starting a provider. `npm run check:local-pilots`
 expects the provider sibling development checkouts. Both are optional

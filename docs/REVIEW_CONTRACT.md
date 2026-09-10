@@ -71,6 +71,11 @@ below cannot by itself end the review.
     prototype, sparse array, custom `toJSON`, cycle, excessive depth, invalid
     UTF-8, lone surrogate, and later caller mutation cannot execute user traps,
     alter the accepted request, or leak a native parser error.
+13. **Carrier locality is not data locality.** A satisfied `local-process`
+    constraint establishes only that this runtime starts the adapter locally.
+    Provider-internal network calls, endpoint policy, credentials, and privacy
+    remain outside that observation and cannot be promoted into a no-egress
+    claim.
 
 ## Reproduced high-risk sequences
 
@@ -124,6 +129,6 @@ current fixture and command spelling.
 - **Runtime human flow:** diagnostic CLI only; no product UI is promised.
 - **Business/experience acceptance:** owner judgment, separate from all lanes.
 
-Every PASS names the current command or flow and observable. End with
-`tools-dev workspace escalations`, including any Capability/Procedure drift,
+Every PASS names the current command or flow and observable. Report concrete
+cross-repository implications when found, including any Capability/Procedure drift,
 installed-host conflict, adjacent provider dependency, or shared resource risk.
