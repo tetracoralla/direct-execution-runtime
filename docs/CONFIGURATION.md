@@ -103,6 +103,12 @@ not create an operating-system sandbox or credential boundary. Deployments
 that require isolation must supply it outside this runtime and must not place
 secrets in provider configuration or work orders.
 
+They also do not create a network boundary. The `local-process` resolution
+constraint means that this runtime launches the configured adapter locally; it
+does not mean the adapter cannot call a remote API. Remote endpoint approval,
+credential retrieval, request redaction, and egress policy belong to the
+configured Provider Instance and the surrounding Host.
+
 ## Closed requirement resolution
 
 `resolve --config ... --requirement ...` accepts
@@ -129,6 +135,10 @@ live MCP contract projection does. Neither route invokes the target operation,
 and neither is a credential, permission, future-health, or business-correctness
 check. Each result is a point-in-time observation that must be reacquired before
 reuse.
+
+A `satisfied` local-process constraint must not be presented as a local-only
+data claim. It says nothing about transitive network behavior inside the
+selected provider process.
 
 Resolution is intentionally absent from the v0.1 Unix Socket request schema.
 A future long-lived-service form requires an explicit protocol revision and

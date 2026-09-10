@@ -1,5 +1,11 @@
 # Direct Execution Runtime repository contract
 
+This checkout is a temporary legacy migration source. New source ownership is
+`../agent-host-suite/packages/direct-execution-runtime`; preserve this checkout
+and its current uncommitted documentation until the Agent Host package passes
+the original Runtime checks and the Host package/build/runtime sequence. Do not
+start a second feature line or publish from this checkout during migration.
+
 Read `docs/PRODUCT_MODEL.md` and `docs/REVIEW_CONTRACT.md` before changing or
 reviewing this runtime.
 

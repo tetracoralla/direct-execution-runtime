@@ -1,5 +1,11 @@
 # Direct Execution Runtime
 
+> **Migration status:** active source ownership is being consolidated into
+> `agent-host-suite/packages/direct-execution-runtime`. This checkout is retained
+> as a recoverable compatibility source while the Agent Host build and runtime
+> routes are revalidated. Do not begin an independent feature or release line
+> here.
+
 Direct Execution Runtime is a local, host-owned execution layer for work that
 an Agent or automation has already reduced to closed structured provider calls.
 It validates those calls, keeps eligible provider processes and MCP sessions
